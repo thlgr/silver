@@ -1,0 +1,40 @@
+# Docker Compose entry point for a self-hosted silver (HTTP API and web UI on
+# one port, http://127.0.0.1:7777).
+#
+# Quick start:
+#   1. create ./config.toml (see docs/configuration.md); the file must exist
+#      because Docker bind-mounts it read-only below. The container binds
+#      0.0.0.0, so silver refuses to start without a bearer token of 16+
+#      characters: set server.bearer_token in that file, or export
+#      SILVER_BEARER_TOKEN and add it under `environment` below.
+#   2. export OPENAI_API_KEY=...  # or whichever key config.toml names
+#   3. docker compose up --build
+#
+# State (state.db and managed memory) lives in the named `silver-data` volume,
+# so `docker compose down` keeps it; `docker compose down -v` removes it.
+
+services:
+  silver:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: silver:local
+    container_name: silver
+    restart: unless-stopped
+    ports:
+      - "7777:7777"
+    environment:
+      RUST_LOG: "${RUST_LOG:-info}"
+      SILVER_BIND: "0.0.0.0:7777"
+      # Read the bind-mounted file instead of the platform default
+      # (~/.config/silver/config.toml). The provider key is passed in the host
+      # environment, so secrets.env does not need to be mounted.
+      SILVER_CONFIG: "/etc/silver/config.toml"
+      OPENAI_API_KEY: "${OPENAI_API_KEY:-}"
+    volumes:
+      - silver-data:/home/silver/.local/share/silver
+      - ./config.toml:/etc/silver/config.toml:ro
+
+volumes:
+  silver-data:
+    driver: local

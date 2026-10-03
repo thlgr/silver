@@ -1,0 +1,42 @@
+[package]
+name = "silver"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+name = "silver"
+path = "src/lib.rs"
+
+[[bin]]
+name = "silver"
+path = "src/main.rs"
+
+[dependencies]
+silver-core = { path = "../../crates/silver-core" }
+silver-protocol = { path = "../../crates/silver-protocol" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+chrono = { version = "0.4", features = ["serde"] }
+uuid = { version = "1", features = ["v7", "serde"] }
+thiserror = "2"
+anyhow = "1"
+async-trait = "0.1"
+tokio = { version = "1", features = ["full"] }
+tokio-util = "0.7"
+reqwest = { version = "0.12", features = ["json", "stream", "rustls-tls"] }
+tokio-rusqlite = { version = "0.6", features = ["bundled"] }
+axum = { version = "0.8", features = ["macros", "json"] }
+tower-http = { version = "0.6", features = ["trace", "limit", "cors"] }
+futures = "0.3"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+toml = "0.8"
+directories = "6"
+clap = { version = "4", features = ["derive", "env"] }
+# AWS SigV4 (Bedrock) and RS256 service-account JWTs (Vertex) need HMAC-SHA256, SHA-256 and
+# RSA-PKCS1 signing; ring already ships in the tree through rustls.
+ring = "0.17"
+sha2 = "0.10"
+base64 = "0.22"
+rust-embed = { version = "8.12.0", features = ["mime-guess"] }

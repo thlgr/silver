@@ -1,0 +1,11 @@
+target*/
+.cargo-home/
+*.db
+*.db-wal
+*.db-shm
+ref/
+/dist/
+AGENTS.md
+scripts/slop*
+.claude
+.cargo-home

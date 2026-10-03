@@ -1,0 +1,65 @@
+name: Nightly E2E
+
+# The push/PR gates live in ci.yml: fmt/clippy/test, the web build, the
+# mock-provider tools script, and `docker build`. This workflow is the scheduled and manually
+# dispatchable counterpart. It re-runs the scripts and validates docker-compose.yml.
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "23 4 * * *"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  e2e:
+    name: mock-provider tools
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      # scripts/*_e2e.sh force these two paths, so the caches must match them.
+      CARGO_HOME: ${{ github.workspace }}/.cargo-home
+      CARGO_TARGET_DIR: ${{ github.workspace }}/target
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry, git and target
+        uses: actions/cache@v4
+        with:
+          path: |
+            .cargo-home/registry
+            .cargo-home/git
+            target
+          key: ${{ runner.os }}-e2e-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-e2e-
+
+      - name: Build debug binaries
+        run: cargo build -p silver
+
+      - name: Run tools e2e
+        run: |
+          set -o pipefail
+          bash scripts/tools_e2e.sh | tee /tmp/tools_e2e.log
+          grep -q 'hi-from-terminal' /tmp/tools_e2e.log
+          grep -q 'tool_result:' /tmp/tools_e2e.log
+
+  compose:
+    name: docker compose config
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate docker-compose.yml
+        run: docker compose -f docker-compose.yml config --quiet

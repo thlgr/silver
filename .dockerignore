@@ -1,0 +1,30 @@
+# Build outputs and per-target directories
+target/
+target-*/
+
+# Local cargo registry/home
+.cargo-home/
+
+# Version control
+.git/
+.gitignore
+
+# Python reference checkout
+ref/
+
+# Web assets: node_modules and dist are rebuilt by the web stage
+**/node_modules/
+apps/web/dist/
+
+# Documentation: keep only the README for image context
+docs/
+!README.md
+
+# Local databases and SQLite side files
+*.db
+*.db-wal
+*.db-shm
+
+# Logs and editor/OS noise
+*.log
+.DS_Store

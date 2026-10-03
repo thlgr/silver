@@ -1,0 +1,214 @@
+/*
+ * Design tokens and shared primitives.
+ *
+ * References: Dieter Rams' Braun work (warm neutral greys, one signal colour reserved for the
+ * primary action, nothing decorative), Massimo Vignelli (one typeface, few sizes, hierarchy
+ * from weight and grey value instead of ornament) and Josef Müller-Brockmann (a 4px grid;
+ * every spacing token is a multiple of it).
+ *
+ * Every colour is a light-dark() pair: `color-scheme` picks the side, so the theme switch is
+ * one attribute on <html>.
+ */
+@import '@fontsource-variable/ibm-plex-sans';
+
+:root {
+  color-scheme: light dark;
+
+  --font: 'IBM Plex Sans Variable', 'Helvetica Neue', Helvetica, system-ui, sans-serif;
+  --mono: ui-monospace, 'JetBrains Mono', 'SF Mono', Menlo, 'DejaVu Sans Mono', monospace;
+  --text-xs: 15px;
+  --text-sm: 16px;
+  --text-md: 17px;
+  --text-lg: 18px;
+  --text-xl: 28px;
+
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-6: 24px;
+  --space-8: 32px;
+
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 16px;
+
+  --bg: light-dark(#ffffff, #0b0b0b);
+  --bg-sidebar: light-dark(#f7f7f5, #0d0c0c);
+  --bg-sunken: light-dark(#f2f2ef, #222220);
+  --bg-raised: light-dark(#ffffff, #262424);
+  --bg-hover: light-dark(rgb(0 0 0 / 5%), rgb(255 255 255 / 6%));
+  --bg-active: light-dark(rgb(0 0 0 / 8%), rgb(255 255 255 / 10%));
+  --bg-bubble: light-dark(#efefeb, #2b2b28);
+  --line: light-dark(rgb(0 0 0 / 9%), rgb(255 255 255 / 8%));
+  --line-strong: light-dark(rgb(0 0 0 / 16%), rgb(255 255 255 / 16%));
+  --ink: light-dark(#1a1a19, #ededea);
+  --ink-2: light-dark(#5c5c57, #a9a9a3);
+  --ink-3: light-dark(#94948e, #74746e);
+  --primary: light-dark(#1a1a19, #ededea);
+  --on-primary: light-dark(#ffffff, #171716);
+  --accent: light-dark(#75dbc0, #60b7ad);
+  --on-accent: #ffffff;
+  --danger: light-dark(#c0392b, #ec6a5c);
+  --success: light-dark(#4a7a3d, #8cbf78);
+  --diff-add: light-dark(rgb(74 122 61 / 12%), rgb(140 191 120 / 14%));
+  --diff-del: light-dark(rgb(192 57 43 / 10%), rgb(236 106 92 / 14%));
+  --scrim: light-dark(rgb(0 0 0 / 24%), rgb(0 0 0 / 50%));
+
+  --sidebar-width: 264px;
+  --panel-width: min(460px, 36vw);
+  --column-width: 760px;
+}
+
+:root[data-theme='light'] { color-scheme: light; }
+:root[data-theme='dark'] { color-scheme: dark; }
+
+*, *::before, *::after { box-sizing: border-box; }
+
+html, body { height: 100%; margin: 0; }
+
+body {
+  background: var(--bg);
+  color: var(--ink);
+  font: 400 var(--text-md) / 1.5 var(--font);
+  -webkit-font-smoothing: antialiased;
+}
+
+button, input, textarea, select { font: inherit; color: inherit; }
+button { cursor: pointer; }
+button:disabled { cursor: default; opacity: 0.45; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+pre, code { font-family: var(--mono); font-size: 0.92em; }
+
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-thumb { background: var(--line-strong); border: 3px solid transparent; border-radius: 8px; background-clip: padding-box; }
+
+/* ---------------------------------------------------------------- buttons */
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  height: 32px;
+  padding: 0 var(--space-3);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-md);
+  background: var(--bg-raised);
+  font-size: var(--text-sm);
+  white-space: nowrap;
+}
+.btn:hover:not(:disabled) { background: var(--bg-hover); }
+.btn.primary { background: var(--primary); color: var(--on-primary); border-color: transparent; }
+.btn.primary:hover:not(:disabled) { background: var(--primary); opacity: 0.85; }
+.btn.danger { color: var(--danger); }
+
+.icon-btn {
+  display: inline-grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--ink-2);
+  font-size: 16px;
+}
+.icon-btn:hover:not(:disabled), .icon-btn[aria-expanded='true'] { background: var(--bg-hover); color: var(--ink); }
+
+/* Quiet text button used for toolbar selectors ("Manual ▾", "model ▾"). */
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  height: 28px;
+  padding: 0 var(--space-2);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--ink-2);
+  font-size: var(--text-sm);
+  white-space: nowrap;
+  max-width: 240px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.chip .label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chip:hover, .chip[aria-expanded='true'] { background: var(--bg-hover); color: var(--ink); }
+
+/* ---------------------------------------------------------------- menus */
+
+.menu {
+  position: absolute;
+  z-index: 20;
+  min-width: 220px;
+  max-height: 360px;
+  overflow: auto;
+  padding: var(--space-1);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-md);
+  background: var(--bg-raised);
+}
+.menu-label { padding: var(--space-2) var(--space-2) var(--space-1); color: var(--ink-3); font-size: var(--text-xs); }
+.menu-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  min-height: 34px;
+  padding: var(--space-1) var(--space-2);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: none;
+  font-size: var(--text-sm);
+  text-align: left;
+}
+.menu-item:hover, .menu-item.active { background: var(--bg-hover); }
+.menu-item .hint { margin-left: auto; color: var(--ink-3); }
+.menu-rule { height: 1px; margin: var(--space-1) 0; background: var(--line); }
+
+/* ---------------------------------------------------------------- forms */
+
+.field {
+  width: 100%;
+  height: 34px;
+  padding: 0 var(--space-3);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-md);
+  background: var(--bg);
+  font-size: var(--text-sm);
+}
+.field:focus { outline: none; border-color: var(--ink-3); }
+
+/* ---------------------------------------------------------------- text */
+
+/* Global so it reaches icon components, which a component's scoped class never does. */
+.spin { animation: spin 0.9s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .spin { animation: none; } }
+
+.muted { color: var(--ink-3); }
+.mono { font-family: var(--mono); font-size: var(--text-xs); }
+.error { color: var(--danger); }
+
+.prose { line-height: 1.7; overflow-wrap: anywhere; }
+.prose > :first-child { margin-top: 0; }
+.prose > :last-child { margin-bottom: 0; }
+.prose p, .prose ul, .prose ol, .prose table, .prose blockquote { margin: 0 0 var(--space-3); }
+.prose h1, .prose h2, .prose h3 { margin: var(--space-6) 0 var(--space-2); font-size: var(--text-lg); font-weight: 600; line-height: 1.4; }
+.prose h1 { font-size: 20px; }
+.prose ul, .prose ol { padding-left: var(--space-6); }
+.prose li + li { margin-top: var(--space-1); }
+.prose a { color: var(--accent); }
+.prose :not(pre) > code { padding: 1px 5px; border-radius: 4px; background: var(--bg-sunken); }
+.prose blockquote { padding-left: var(--space-3); border-left: 2px solid var(--line-strong); color: var(--ink-2); }
+.prose table { width: 100%; border-collapse: collapse; font-size: var(--text-sm); }
+.prose th { font-weight: 500; color: var(--ink-2); text-align: left; }
+.prose th, .prose td { padding: var(--space-2) var(--space-3) var(--space-2) 0; border-bottom: 1px solid var(--line); }
+.prose hr { border: 0; border-top: 1px solid var(--line); }
+
+.codeblock { margin: 0 0 var(--space-3); border-radius: var(--radius-md); background: var(--bg-sunken); overflow: hidden; }
+.codeblock-bar { display: flex; justify-content: space-between; padding: var(--space-2) var(--space-3) 0; color: var(--ink-3); font: var(--text-xs) var(--mono); }
+.codeblock-bar button { border: 0; background: none; color: var(--ink-2); font: inherit; }
+.codeblock pre { margin: 0; padding: var(--space-2) var(--space-3) var(--space-3); overflow-x: auto; line-height: 1.6; }
