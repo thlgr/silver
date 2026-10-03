@@ -317,7 +317,7 @@ pub fn parse_definition(path: &Path, content: &str) -> Result<AgentDefinition, D
         path: path.to_path_buf(),
         message,
     };
-    let (fields, body) = split_frontmatter(content).map_err(&fail)?;
+    let (fields, body) = split_frontmatter(content).map_err(fail)?;
     let mut name: Option<String> = None;
     let mut description: Option<String> = None;
     let mut tools: Option<Vec<String>> = None;
