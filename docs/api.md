@@ -56,6 +56,7 @@ and key. One run per session at a time: a second returns `session_busy`.
 | POST | `/v1/runs/{id}/stop` | Idempotent cancellation; returns the known run |
 | POST | `/v1/runs/{id}/steer` | Queue guidance for an active run; 202; `run_not_active` otherwise |
 | POST | `/v1/runs/{id}/approval` | Decide `{approval_id, decision, answer?}`; `decision` is `approve`, `approve_session`, `approve_always` or `deny`; `answer` with `approve` replies to an `ask_user_question`; 204 |
+| POST | `/agent` | The [AG-UI](agui.md) endpoint: POST a `RunAgentInput`, stream AG-UI events back over SSE |
 | POST | `/v1/daemon/pause` | Emergency stop: refuse new runs, let running ones drain. Persists across restarts |
 | POST | `/v1/daemon/resume` | Release it |
 | GET | `/v1/daemon/status` | `{paused}` |
