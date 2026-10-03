@@ -195,6 +195,7 @@
       </div>
     {/if}
 
+    <!-- svelte-ignore a11y_no_static_element_interactions -->
     <div class="input" class:dropping {ondragover} {ondragleave} {ondrop}>
       <textarea
         bind:this={input}
