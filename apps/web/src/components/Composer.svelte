@@ -211,7 +211,7 @@
       <input bind:this={picker} type="file" multiple hidden
         onchange={(e) => (attachFiles([...e.target.files]), (e.target.value = ''))} />
       <button class="chip" title="Attach files" onclick={() => picker.click()}>
-        <IconPaperclip /> <span class="label">Attach</span>
+        <IconPaperclip /> 
       </button>
       <Popover label="Approval mode" up>
         {#snippet trigger()}<IconShield /> <span class="label">{plan ? 'Plan mode' : `${MODES[app.approvals?.mode] ?? 'Approvals'}${yolo ? ', YOLO' : ''}`}</span> <IconDown />{/snippet}
