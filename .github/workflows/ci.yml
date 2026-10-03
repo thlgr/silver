@@ -126,5 +126,5 @@ jobs:
         run: |
           set -o pipefail
           bash scripts/tools_e2e.sh | tee /tmp/tools_e2e.log
-          grep -q 'hi-from-terminal' /tmp/tools_e2e.log
+          grep -q 'hi-from-bash' /tmp/tools_e2e.log
           grep -q 'tool_result:' /tmp/tools_e2e.log
