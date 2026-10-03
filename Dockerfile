@@ -51,7 +51,7 @@ RUN cargo build --release --workspace --locked
 # ---- Runtime stage ---------------------------------------------------------
 FROM debian:bookworm-slim AS runtime
 
-# rustls is used instead of OpenSSL, so only the CA bundle is needed.
+# rustls reads the system CA bundle instead of linking OpenSSL, so only ca-certificates is needed.
 RUN apt-get update \
  && apt-get install -y --no-install-recommends ca-certificates \
  && rm -rf /var/lib/apt/lists/*

@@ -24,7 +24,9 @@ anyhow = "1"
 async-trait = "0.1"
 tokio = { version = "1", features = ["full"] }
 tokio-util = "0.7"
-reqwest = { version = "0.12", features = ["json", "stream", "rustls-tls"] }
+# rustls with the OS trust store. Without default-features = false reqwest also builds native-tls,
+# which needs OpenSSL and cannot link into a static musl binary.
+reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls-native-roots", "http2", "charset", "macos-system-configuration"] }
 tokio-rusqlite = { version = "0.6", features = ["bundled"] }
 axum = { version = "0.8", features = ["macros", "json"] }
 tower-http = { version = "0.6", features = ["trace", "limit", "cors"] }

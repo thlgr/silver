@@ -27,7 +27,7 @@
         let
           pkgs = nixpkgs.legacyPackages.${system};
           packages = import ./silver.nix {
-            inherit (pkgs) lib rustPlatform buildNpmPackage importNpmLock nodejs pkg-config openssl;
+            inherit (pkgs) lib rustPlatform buildNpmPackage importNpmLock nodejs pkg-config;
             src = silver-src;
           };
         in
@@ -41,7 +41,6 @@
               clippy
               nodejs
               pkg-config
-              openssl
               rustc
               rustfmt
             ];

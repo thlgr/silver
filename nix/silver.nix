@@ -1,7 +1,7 @@
 # Derivations for silver: the web UI (apps/web) and the Rust binary that embeds it.
 #
 # Imported from flake.nix:
-#   import ./silver.nix { inherit (pkgs) lib rustPlatform buildNpmPackage importNpmLock nodejs pkg-config openssl; src = ...; }
+#   import ./silver.nix { inherit (pkgs) lib rustPlatform buildNpmPackage importNpmLock nodejs pkg-config; src = ...; }
 #
 # `src` is the repository root. The flake lives under nix/, so the root arrives
 # as a flake input; `cargoLock.lockFile` and importNpmLock read Cargo.lock and
@@ -13,7 +13,6 @@
   importNpmLock,
   nodejs,
   pkg-config,
-  openssl,
   src,
   version ? "0.1.0",
 }:
@@ -64,10 +63,7 @@ let
       cp -r ${web} apps/web/dist
       chmod -R u+w apps/web/dist
     '';
-    # reqwest keeps its default native-tls feature enabled alongside rustls, so
-    # system OpenSSL is required at build time.
     nativeBuildInputs = [ pkg-config ];
-    buildInputs = [ openssl ];
     strictDeps = true;
     # The test suite binds TCP ports and needs a writable HOME. The scored,
     # network-free scenarios run separately via scripts/run_evals.sh.
