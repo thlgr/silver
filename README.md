@@ -16,6 +16,8 @@ modified to make it more focused for software development and for small/dumb LLM
 
 Open <http://127.0.0.1:7777>, add a workspace, and pick a provider under Settings → Providers
 (or export `OPENAI_API_KEY`). `./scripts/install.sh` installs the binary into `~/.local/bin`.
+Prebuilt binaries for Linux (x86_64, ARM64), macOS (Apple Silicon, Intel) and Windows (x86_64) are
+on the [releases page](https://github.com/thlgr/silver/releases).
 
 A run works either inside one registered **workspace** (file and shell tools, its own sessions and
 memory) or with **no workspace** (no file or shell tools, a separate global scope). Scopes never
