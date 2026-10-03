@@ -1,0 +1,66 @@
+name: Release
+
+# A version tag builds the release binary and publishes it. Release builds
+# embed apps/web/dist, which apps/silver/build.rs builds itself, so Node must
+# be on PATH before cargo runs.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  release:
+    name: build and publish
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+
+      - name: Cache cargo registry and git
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-release-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-release-cargo-
+
+      - name: Build
+        run: cargo build --release --locked -p silver
+
+      - name: Package
+        run: |
+          set -eu
+          dir="silver-${GITHUB_REF_NAME#v}-x86_64-unknown-linux-gnu"
+          mkdir -p "dist/$dir/bin"
+          install -m 0755 target/release/silver "dist/$dir/bin/silver"
+          cp README.md "dist/$dir/"
+          (cd dist && tar czf "$dir.tar.gz" "$dir" \
+            && sha256sum "$dir.tar.gz" > "$dir.tar.gz.sha256")
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            --prerelease \
+            --generate-notes \
+            --title "silver $GITHUB_REF_NAME (beta)" \
+            dist/*.tar.gz dist/*.tar.gz.sha256
