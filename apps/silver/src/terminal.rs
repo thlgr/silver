@@ -6,11 +6,10 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use silver_core::error::{CoreError, CoreResult};
 use silver_core::services::{ProcessAction, ProcessInfo, TerminalBackend, TerminalOutput};
-use silver_core::tools::command::{detach, filtered_env, kill_process_group};
+use silver_core::tools::command::{detach, exit_code, filtered_env, kill_process_group};
 use silver_protocol::Scope;
 use std::collections::HashMap;
 use std::io::{Read, Seek, SeekFrom};
-use std::os::unix::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -20,8 +19,6 @@ use tokio::io::{AsyncRead, AsyncReadExt};
 use tokio::process::{Child, Command};
 use tokio::sync::Mutex;
 
-/// The shell used for every command.
-const SHELL: &str = "bash";
 /// Maximum number of output bytes returned to the caller.
 const MAX_OUTPUT_BYTES: usize = 1_048_576;
 /// Hard upper bound accepted for a per-call timeout, in seconds.
@@ -89,7 +86,7 @@ impl TerminalManager {
             .map_err(start_error)?;
         drop(std::fs::remove_file(&path));
 
-        let mut std_command = std::process::Command::new(SHELL);
+        let mut std_command = std::process::Command::new(shell());
         std_command.arg("-c").arg(command);
         prepare_env(&mut std_command, &self.env_passthrough);
         if let Some(dir) = cwd {
@@ -102,7 +99,7 @@ impl TerminalManager {
         detach(&mut std_command);
         let mut runner: Command = std_command.into();
         runner.kill_on_drop(true);
-        let mut child = runner.spawn().map_err(start_error)?;
+        let mut child = spawn_shell(&mut runner)?;
         // Stops whatever is left of the command when the call ends: finished, timed out, or
         // dropped by a stop or the tool watchdog.
         let _group = KillGroupOnDrop(child.id());
@@ -129,8 +126,7 @@ impl TerminalManager {
         output.truncate(MAX_OUTPUT_BYTES);
         Ok(TerminalOutput {
             output: finalize(output, truncated),
-            // A command killed by signal N reads as 128 + N, as a shell reports it.
-            exit_code: status.code().or_else(|| status.signal().map(|n| 128 + n)),
+            exit_code: exit_code(status),
             process_id: None,
             truncated,
         })
@@ -145,7 +141,7 @@ impl TerminalManager {
         let serial = self.next_process.fetch_add(1, Ordering::Relaxed);
         let id = format!("proc_{serial:012x}");
 
-        let mut std_command = std::process::Command::new(SHELL);
+        let mut std_command = std::process::Command::new(shell());
         std_command.arg("-c").arg(command);
         prepare_env(&mut std_command, &self.env_passthrough);
         if let Some(dir) = cwd {
@@ -155,9 +151,7 @@ impl TerminalManager {
         detach(&mut std_command);
         let mut runner: Command = std_command.into();
         runner.stdout(Stdio::piped()).stderr(Stdio::piped());
-        let mut child = runner
-            .spawn()
-            .map_err(|e| CoreError::Internal(format!("failed to start background process: {e}")))?;
+        let mut child = spawn_shell(&mut runner)?;
 
         let output = Arc::new(std::sync::Mutex::new(Vec::<u8>::new()));
         if let Some(stdout) = child.stdout.take() {
@@ -382,6 +376,37 @@ impl BackgroundProcess {
             "output": self.render_output(),
         })
     }
+}
+
+/// The shell used for every command. Git for Windows' bash is not on PATH by default, and the
+/// `bash.exe` in System32 is WSL's launcher, so look for Git's install first.
+#[cfg(windows)]
+fn shell() -> PathBuf {
+    [("ProgramFiles", "Git"), ("LOCALAPPDATA", r"Programs\Git")]
+        .into_iter()
+        .filter_map(|(var, dir)| {
+            let base = std::env::var_os(var)?;
+            Some(Path::new(&base).join(dir).join(r"bin\bash.exe"))
+        })
+        .find(|bash| bash.is_file())
+        .unwrap_or_else(|| PathBuf::from("bash"))
+}
+
+#[cfg(not(windows))]
+fn shell() -> PathBuf {
+    PathBuf::from("bash")
+}
+
+/// Spawn the shell. Windows has no bash of its own, so a missing one says where to get it.
+fn spawn_shell(runner: &mut Command) -> CoreResult<Child> {
+    runner.spawn().map_err(|e| {
+        let hint = if cfg!(windows) && e.kind() == std::io::ErrorKind::NotFound {
+            "; install Git for Windows (https://git-scm.com/download/win), which provides bash"
+        } else {
+            ""
+        };
+        CoreError::Internal(format!("failed to start bash: {e}{hint}"))
+    })
 }
 
 /// Copy only the allow-listed parent variables into a child command.

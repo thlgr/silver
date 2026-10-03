@@ -3,6 +3,9 @@
 use std::path::Path;
 use std::process::Command;
 
+// Command finds only `.exe` programs on Windows, and npm there is a `.cmd` script.
+const NPM: &str = if cfg!(windows) { "npm.cmd" } else { "npm" };
+
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
     if std::env::var("PROFILE").as_deref() != Ok("release") {
@@ -19,8 +22,7 @@ fn main() {
         println!("cargo:rerun-if-changed=../web/{input}");
     }
     // The Docker Rust stage has no Node and gets dist from its own web stage.
-    if !web.join("package.json").exists() || Command::new("npm").arg("--version").output().is_err()
-    {
+    if !web.join("package.json").exists() || Command::new(NPM).arg("--version").output().is_err() {
         println!("cargo:warning=npm or apps/web not found; embedding the existing apps/web/dist");
         return;
     }
@@ -31,7 +33,7 @@ fn main() {
 }
 
 fn npm(dir: &Path, args: &[&str]) {
-    let status = Command::new("npm").args(args).current_dir(dir).status();
+    let status = Command::new(NPM).args(args).current_dir(dir).status();
     if !matches!(status, Ok(status) if status.success()) {
         panic!(
             "`npm {}` failed in apps/web; fix the UI build above",

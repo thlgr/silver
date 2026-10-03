@@ -21,8 +21,8 @@ const MAX_TIMEOUT_SECS: u64 = 600;
 /// Maximum number of combined output bytes returned to the model.
 const MAX_OUTPUT_BYTES: usize = 1_048_576;
 /// Variables a tool-spawned child keeps; never the daemon's whole environment, where provider keys
-/// live. Toolchain basics, locale, identity, and the desktop-session handles (`XDG_RUNTIME_DIR`,
-/// `WAYLAND_DISPLAY`, `DISPLAY`, the session bus) GUI-backed CLIs need. None holds a secret.
+/// live. Toolchain basics, locale, identity, desktop-session handles (`XDG_RUNTIME_DIR`, `DISPLAY`,
+/// ...) and the Windows ones a shell cannot start without (`SYSTEMROOT`). None holds a secret.
 pub const PRESERVED_ENV: &[&str] = &[
     "PATH",
     "HOME",
@@ -42,6 +42,18 @@ pub const PRESERVED_ENV: &[&str] = &[
     "DISPLAY",
     "XAUTHORITY",
     "DBUS_SESSION_BUS_ADDRESS",
+    "SYSTEMROOT",
+    "WINDIR",
+    "COMSPEC",
+    "PATHEXT",
+    "USERPROFILE",
+    "USERNAME",
+    "APPDATA",
+    "LOCALAPPDATA",
+    "PROGRAMFILES",
+    "PROGRAMDATA",
+    "TEMP",
+    "TMP",
 ];
 
 /// The parent variables a tool-spawned child may keep: the PRESERVED_ENV allow-list plus the
@@ -62,6 +74,19 @@ pub fn filtered_env(extra: &[String]) -> Vec<(String, std::ffi::OsString)> {
         }
     }
     kept
+}
+
+/// A child killed by signal N exits as 128 + N, as a shell reports it.
+#[cfg(unix)]
+pub fn exit_code(status: std::process::ExitStatus) -> Option<i32> {
+    use std::os::unix::process::ExitStatusExt;
+    status.code().or_else(|| status.signal().map(|n| 128 + n))
+}
+
+/// Non-Unix fallback: there are no signals.
+#[cfg(not(unix))]
+pub fn exit_code(status: std::process::ExitStatus) -> Option<i32> {
+    status.code()
 }
 
 /// Start the child in a new session: it leads its own process group for [kill_process_group], and

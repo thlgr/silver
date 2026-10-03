@@ -24,9 +24,11 @@ pub async fn create(
     // "~/code/app" is how people type a folder; a relative path would silently resolve
     // against wherever the daemon was started.
     let raw = request.path.trim();
-    let requested = match (raw.strip_prefix('~'), std::env::var_os("HOME")) {
-        (Some(rest), Some(home)) if rest.is_empty() || rest.starts_with('/') => {
-            PathBuf::from(home).join(rest.trim_start_matches('/'))
+    let requested = match (raw.strip_prefix('~'), silver_core::dirs::home_dir()) {
+        (Some(rest), Some(home))
+            if rest.is_empty() || rest.starts_with(std::path::is_separator) =>
+        {
+            home.join(rest.trim_start_matches(std::path::is_separator))
         }
         _ => PathBuf::from(raw),
     };
