@@ -1,9 +1,10 @@
 # silver
 
-A personal coding agent. One Rust binary owns the agent loop, tools, sessions, memory and SQLite
+An experimental coding agent. One Rust binary owns the agent loop, tools, sessions, memory and SQLite
 persistence, and serves an HTTP + SSE API and a web UI on the same port. It works with hosted
-models and with small local ones (LM Studio, llama.cpp, Ollama). It is a selective Rust port of
-the behaviour of [NousResearch/hermes-agent](https://github.com/NousResearch/hermes-agent).
+models and with small local ones (LM Studio, llama.cpp, Ollama). It started as a selective Rust port of
+the behaviour of [NousResearch/hermes-agent](https://github.com/NousResearch/hermes-agent); but now heavily
+modified to make it more focused for software development and for small/dumb LLMs use.
 
 > [!WARNING]
 > Most of the source was generated with LLMs, with human guidance and review.
