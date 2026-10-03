@@ -4,6 +4,7 @@
 
 pub mod acp;
 pub mod advisor;
+pub mod agui;
 pub mod anthropic;
 pub mod api;
 pub mod approval_memory;

@@ -2,6 +2,7 @@
 
 pub mod advisor;
 pub mod agents;
+pub mod agui;
 pub mod approvals;
 pub mod checkpoints;
 pub mod commands;
@@ -261,6 +262,7 @@ fn routes() -> Router<AppState> {
         .route("/v1/runs/{run_id}/stop", post(runs::stop))
         .route("/v1/runs/{run_id}/steer", post(runs::steer))
         .route("/v1/runs/{run_id}/approval", post(runs::approval))
+        .route("/agent", post(agui::run))
         .route("/v1/checkpoints", get(checkpoints::list))
         .route("/v1/checkpoints/{id}/restore", post(checkpoints::restore))
         .route("/v1/diff", get(git::diff))
