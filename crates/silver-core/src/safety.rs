@@ -2,6 +2,7 @@
 //! typed denial and an audit trail. Pass absolute paths: a relative `auth.json` misses the
 //! denylist. The free predicates expand `~` and treat relative paths as home-relative.
 
+use crate::dirs::{home_dir, project_dirs};
 use std::borrow::Cow;
 use std::path::{Path, PathBuf};
 
@@ -186,14 +187,15 @@ impl SafetyRoots {
         Self { home, silver_dirs }
     }
 
-    /// Resolve roots from the process environment.
+    /// Resolve roots from the platform: the user's home and silver's config and data directories.
     pub fn from_env() -> Self {
-        let home = std::env::var_os("HOME")
-            .map(PathBuf::from)
-            .unwrap_or_default();
-        let config = xdg_dir("XDG_CONFIG_HOME", &home, ".config").join("silver");
-        let data = xdg_dir("XDG_DATA_HOME", &home, ".local/share").join("silver");
-        Self::new(home, vec![config, data])
+        let silver_dirs = project_dirs().into_iter().flat_map(|dirs| {
+            [
+                dirs.config_dir().to_path_buf(),
+                dirs.data_dir().to_path_buf(),
+            ]
+        });
+        Self::new(home_dir().unwrap_or_default(), silver_dirs)
     }
 
     /// The OS home this guard covers.
@@ -360,11 +362,4 @@ fn blocked_env_basename(lower: &str) -> bool {
 
 fn canonical_or_raw(path: &Path) -> PathBuf {
     std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
-}
-
-fn xdg_dir(variable: &str, home: &Path, fallback: &str) -> PathBuf {
-    std::env::var_os(variable)
-        .map(PathBuf::from)
-        .filter(|path| path.is_absolute())
-        .unwrap_or_else(|| home.join(fallback))
 }

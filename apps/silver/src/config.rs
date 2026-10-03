@@ -1472,7 +1472,7 @@ pub fn global_agents_dir() -> PathBuf {
 
 /// The platform default config directory, before any profile or environment override.
 fn default_config_dir() -> PathBuf {
-    if let Some(dirs) = directories::ProjectDirs::from("dev", "silver", "silver") {
+    if let Some(dirs) = silver_core::dirs::project_dirs() {
         dirs.config_dir().to_path_buf()
     } else {
         PathBuf::from("./silver-config")
@@ -1553,7 +1553,7 @@ fn strip_quotes(value: &str) -> &str {
 }
 
 fn default_data_dir() -> PathBuf {
-    if let Some(dirs) = directories::ProjectDirs::from("dev", "silver", "silver") {
+    if let Some(dirs) = silver_core::dirs::project_dirs() {
         dirs.data_dir().to_path_buf()
     } else {
         PathBuf::from("./silver-data")

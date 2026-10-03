@@ -4,6 +4,7 @@
 pub mod advisor;
 pub mod agent;
 pub mod context;
+pub mod dirs;
 pub mod error;
 pub mod event;
 pub mod lsp;
