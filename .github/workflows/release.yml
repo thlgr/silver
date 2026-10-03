@@ -1,11 +1,13 @@
 name: Release
 
-# A version tag builds the release binary and publishes it. Release builds
-# embed apps/web/dist, which apps/silver/build.rs builds itself, so Node must
-# be on PATH before cargo runs.
+# A version tag builds the release binary for every supported system and
+# publishes one release. Release builds embed apps/web/dist, which
+# apps/silver/build.rs builds itself, so Node must be on PATH before cargo runs.
+# Run it by hand to check every build without publishing anything.
 on:
   push:
     tags: ["v*"]
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -14,16 +16,38 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  release:
-    name: build and publish
-    runs-on: ubuntu-latest
+  build:
+    name: build ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # `name` is what users see in the archive name; Linux is static (musl) so one
+          # archive runs on any distro. Windows runs commands through Git for Windows' bash.
+          - { name: linux-x86_64, target: x86_64-unknown-linux-musl, os: ubuntu-latest }
+          - { name: linux-arm64, target: aarch64-unknown-linux-musl, os: ubuntu-24.04-arm }
+          - { name: macos-arm64, target: aarch64-apple-darwin, os: macos-latest }
+          - { name: macos-x86_64, target: x86_64-apple-darwin, os: macos-latest }
+          - { name: windows-x86_64, target: x86_64-pc-windows-msvc, os: windows-latest }
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install musl C compiler
+        if: contains(matrix.target, 'musl')
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends musl-tools
+          echo "CC_${TARGET//-/_}=musl-gcc" >> "$GITHUB_ENV"
 
       - name: Install Node
         uses: actions/setup-node@v4
@@ -38,29 +62,68 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-          key: ${{ runner.os }}-release-cargo-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ matrix.target }}-release-cargo-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            ${{ runner.os }}-release-cargo-
+            ${{ matrix.target }}-release-cargo-
 
       - name: Build
-        run: cargo build --release --locked -p silver
+        run: cargo build --release --locked -p silver --target ${{ matrix.target }}
 
       - name: Package
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
         run: |
           set -eu
-          dir="silver-${GITHUB_REF_NAME#v}-x86_64-unknown-linux-gnu"
-          mkdir -p "dist/$dir/bin"
-          install -m 0755 target/release/silver "dist/$dir/bin/silver"
-          cp README.md "dist/$dir/"
-          (cd dist && tar czf "$dir.tar.gz" "$dir" \
-            && sha256sum "$dir.tar.gz" > "$dir.tar.gz.sha256")
+          dir="silver-${GITHUB_REF_NAME#v}-${{ matrix.name }}"
+          mkdir -p "dist/$dir"
+          cp README.md LICENSE "dist/$dir/"
+          if [ "$RUNNER_OS" = Windows ]; then
+            install "target/$TARGET/release/silver.exe" "dist/$dir/"
+            (cd dist && 7z a -bso0 "$dir.zip" "$dir")
+          else
+            install -m 0755 "target/$TARGET/release/silver" "dist/$dir/"
+            tar czf "dist/$dir.tar.gz" -C dist "$dir"
+          fi
+
+      - name: Upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: silver-${{ matrix.name }}
+          path: |
+            dist/*.tar.gz
+            dist/*.zip
+          if-no-files-found: error
+
+  publish:
+    name: publish
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download archives
+        uses: actions/download-artifact@v4
+        with:
+          pattern: silver-*
+          path: dist
+          merge-multiple: true
+
+      - name: Checksums
+        run: cd dist && sha256sum silver-* > SHA256SUMS
 
       - name: Publish
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          scripts/release_notes.sh "$GITHUB_REF_NAME" dist > notes.md
           gh release create "$GITHUB_REF_NAME" \
             --prerelease \
-            --generate-notes \
             --title "silver $GITHUB_REF_NAME (beta)" \
-            dist/*.tar.gz dist/*.tar.gz.sha256
+            --notes-file notes.md \
+            dist/silver-* dist/SHA256SUMS
