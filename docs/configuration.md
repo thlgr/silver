@@ -157,7 +157,7 @@ agent keeps its own loop and tools; silver only relays its prose ([transports](p
 | Key | Default | Notes |
 | --- | --- | --- |
 | `write_requires_approval`, `command_requires_approval` | `true` | See [Approvals](tools.md#approvals). |
-| `approval_mode` | `manual` | `manual`, `smart` or `off`. |
+| `approval_mode` | `smart` | `manual`, `smart` or `off`. |
 | `approval_timeout_seconds` | 300 | An unanswered approval counts as a denial. |
 | `deny_commands` | `[]` | Glob patterns refused before the approval gate. |
 | `tool_timeout_seconds` | 120 | Watchdog over every tool call; `bash` may ask for a longer `timeout`. |

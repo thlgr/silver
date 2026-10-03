@@ -239,11 +239,10 @@ pub struct AuxiliaryConfig {
 }
 
 /// How gated tool calls are approved.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ApprovalMode {
-    /// Ask for approval (the safe default).
-    #[default]
+    /// Ask for approval for every gated call.
     Manual,
     /// Let the auxiliary model auto-approve low-risk calls and ask otherwise.
     Smart,
@@ -258,8 +257,8 @@ pub struct ToolsConfig {
     pub command_requires_approval: bool,
     pub max_output_bytes: u64,
     pub tool_timeout_seconds: u64,
-    /// manual (default) prompts for approval; smart lets the auxiliary model approve
-    /// low-risk calls; off disables approval prompts.
+    /// smart (the default) lets the auxiliary model approve low-risk calls and prompts for
+    /// the rest; manual prompts for every gated call; off disables approval prompts.
     pub approval_mode: ApprovalMode,
     /// Seconds an approval request may wait before it is abandoned. Minimum 1.
     pub approval_timeout_seconds: u64,
@@ -286,7 +285,9 @@ impl Default for ToolsConfig {
             command_requires_approval: true,
             max_output_bytes: 1_048_576,
             tool_timeout_seconds: 120,
-            approval_mode: ApprovalMode::Manual,
+            // Smart without an auxiliary route prompts for everything, so it is never the
+            // looser mode by accident.
+            approval_mode: ApprovalMode::Smart,
             approval_timeout_seconds: 300,
             deny_commands: Vec::new(),
             enabled: Vec::new(),

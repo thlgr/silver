@@ -81,7 +81,7 @@ tokens. Edit `config.toml` and restart to change the lists
 
 ```toml
 [tools]
-approval_mode = "manual"        # manual (default) | smart | off
+approval_mode = "smart"         # smart (default) | manual | off
 write_requires_approval = true
 command_requires_approval = true
 approval_timeout_seconds = 300
@@ -96,9 +96,9 @@ always gated.
 `approval_mode` picks who decides:
 
 - `manual` prompts for every gated call.
-- `smart` asks the auxiliary model (`[auxiliary]`) to approve clearly low-risk calls and prompts
-  for the rest. Without an auxiliary route, or if the review errors or times out, it behaves like
-  `manual`.
+- `smart` (the default) asks the auxiliary model (`[auxiliary]`) to approve clearly low-risk
+  calls and prompts for the rest. Without an auxiliary route, or if the review errors or times
+  out, it behaves like `manual`.
 - `off` skips prompts (YOLO). The hardline floor and `deny_commands` still apply because they run
   before the gate.
 
