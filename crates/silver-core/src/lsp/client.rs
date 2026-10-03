@@ -4,6 +4,7 @@
 
 use super::protocol::{self, Incoming, RequestError, RequestId};
 use super::LspError;
+use crate::tools::command::kill_process_group;
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
@@ -198,7 +199,7 @@ struct IoHandles {
     stdin: BoxWriter,
     reader: BoxReader,
     stderr: Option<ChildStderr>,
-    pgid: Option<i32>,
+    pgid: Option<u32>,
 }
 
 /// One language server process and one workspace root.
@@ -213,7 +214,7 @@ pub struct LspClient {
     diagnostics: Mutex<HashMap<PathBuf, DiagnosticState>>,
     next_id: AtomicI64,
     state: Mutex<ClientState>,
-    pgid: Option<i32>,
+    pgid: Option<u32>,
     reader_task: Mutex<Option<JoinHandle<()>>>,
     stderr_task: Mutex<Option<JoinHandle<()>>>,
     /// The server's last stderr line: when it dies, usually the reason (a missing binary,
@@ -256,7 +257,7 @@ impl LspClient {
         let mut child = command.spawn().map_err(|error| {
             LspError::ServerUnavailable(format!("cannot spawn {program}: {error}"))
         })?;
-        let pgid = child.id().map(|id| id as i32);
+        let pgid = child.id();
         let Some(stdin) = child.stdin.take().map(|stdin| Box::new(stdin) as BoxWriter) else {
             return Err(LspError::ServerUnavailable(
                 "server has no stdin pipe".to_string(),
@@ -847,13 +848,8 @@ impl LspClient {
     }
 
     fn kill_group(&self) {
-        #[cfg(unix)]
         if let Some(pgid) = self.pgid {
-            // SAFETY: kill(2) with a negative pid signals the child's own process
-            // group, which process_group(0) made it the leader of.
-            unsafe {
-                libc::kill(-pgid, libc::SIGKILL);
-            }
+            kill_process_group(pgid);
         }
         if let Ok(mut guard) = self.child.try_lock() {
             if let Some(child) = guard.as_mut() {
