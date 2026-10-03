@@ -140,7 +140,7 @@ class Handler(BaseHTTPRequestHandler):
             # the refusal path.
             agent = re.search(r"to the ([a-z-]+) agent", lowered)
             tool("delegate_task", {"tasks": [
-                {"agent": agent.group(1) if agent else "explore",
+                {"agent": agent.group(1) if agent else "general-purpose",
                  "description": "look around",
                  "prompt": "Look for the greeting the app prints. Report it."}
             ]}, "call_delegate_1")
