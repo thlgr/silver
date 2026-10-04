@@ -509,6 +509,13 @@ impl Agent {
         self
     }
 
+    /// Hide `tools` from this run, whatever the filters above allow.
+    pub fn without_tools(mut self, tools: &[&str]) -> Self {
+        self.tool_deny
+            .extend(tools.iter().map(|name| (*name).to_string()));
+        self
+    }
+
     /// Restrict this run to exactly `tools`: the toolset filter is lifted and the name
     /// deny-list is cleared, so a deny-listed tool is visible once listed. An empty
     /// list means no tools.

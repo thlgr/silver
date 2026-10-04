@@ -13,6 +13,7 @@ pub mod process;
 pub mod replace;
 pub mod session_search;
 pub mod skills;
+pub mod team;
 pub mod todo;
 pub mod vision;
 pub mod web;
@@ -20,7 +21,8 @@ pub mod write;
 
 use crate::tool::ToolRegistry;
 
-/// Register every core tool except delegation, which the daemon registers with its runner.
+/// Register every core tool except delegation, which the daemon registers with its runner, and
+/// the team tools, which belong to the chat.
 pub fn register_default_tools(registry: &mut ToolRegistry) {
     fs::register(registry);
     vision::register(registry);
