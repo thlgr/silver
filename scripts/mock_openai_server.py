@@ -146,6 +146,10 @@ class Handler(BaseHTTPRequestHandler):
             ]}, "call_delegate_1")
         elif not has_tool_result and "shell" in lowered:
             tool("bash", {"command": "printf hi-from-bash"}, "call_shell_1")
+        elif not has_tool_result and "askbot" in lowered:
+            # "askbot bob" has the bot put a request to the bot called bob.
+            target = re.search(r"askbot ([a-z0-9]+)", lowered)
+            tool("ask_bot", {"bot": target.group(1) if target else "", "message": "Please say hello."}, "call_ask_1")
         elif not has_tool_result and "todo" in lowered:
             tool("todo_list", {"todos": [{"id": "1", "content": "task one", "status": "pending"}]}, "call_todo_1")
         elif not has_tool_result and "file" in lowered:
@@ -161,9 +165,24 @@ class Handler(BaseHTTPRequestHandler):
             tool("view_image", {"path": "shot.png", "question": "what is in it?"}, "call_image_1")
         elif not has_tool_result and "document" in lowered:
             tool("search_documents", {"query": "revenue", "path": "notes.md"}, "call_doc_1")
+        elif "slowpoke" in lowered:
+            # A reply that takes a while, so a test can stop it halfway.
+            for index in range(40):
+                emit({"content": "tick %d " % index})
+                time.sleep(0.15)
+            emit({}, "stop")
         elif images:
             # The follow-up turn carries the picture the tool loaded; report that it arrived.
             text = "Mock reply: I can see the image (%d characters of data URL)." % image_bytes
+            for index in range(0, len(text), 8):
+                emit({"content": text[index:index + 8]})
+                time.sleep(0.02)
+            emit({}, "stop")
+        elif "group chat" in lowered and "you are " in lowered:
+            # A room turn: answer the user, pass on everyone else's replies; "stay silent" passes.
+            who = re.search(r"you are ([^,]+),", last_user, re.I).group(1)
+            # Only the user's own message in the room is worth answering, not the replies to it.
+            text = who + " here: on it." if "\nuser:" in lowered and "stay silent" not in lowered else "(pass)"
             for index in range(0, len(text), 8):
                 emit({"content": text[index:index + 8]})
                 time.sleep(0.02)
@@ -179,5 +198,11 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.flush()
 
 
+class Server(ThreadingHTTPServer):
+    def handle_error(self, request, client_address):
+        # A client that hangs up mid-stream (a stopped run) is not worth a traceback.
+        pass
+
+
 if __name__ == "__main__":
-    ThreadingHTTPServer(("127.0.0.1", PORT), Handler).serve_forever()
+    Server(("127.0.0.1", PORT), Handler).serve_forever()

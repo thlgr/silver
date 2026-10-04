@@ -35,6 +35,7 @@ explicitly.
 | Frontier APIs | `openai`, `anthropic`, `google`, `xai`, `mistral`, `deepseek`, `moonshot`, `moonshot-cn`, `zai`, `minimax`, `minimax-cn`, `alibaba`, `alibaba-coding-plan`, `meta-ai`, `xiaomi`, `stepfun`, `upstage`, `arcee` |
 | Routers and hosts | `openrouter`, `groq`, `together`, `cerebras`, `fireworks`, `deepinfra`, `nvidia`, `novita`, `nebius`, `huggingface`, `ai-gateway`, `gmi`, `kilocode`, `ollama-cloud`, `tencent-tokenhub`, `tencent-tokenplan`, `router`, `commandcode`, `actual`, `nous`, `qwen-portal` |
 | Subscriptions and cloud SDKs | `copilot`, `openai-codex`, `opencode-zen`, `opencode-go`, `bedrock`, `vertex`, `azure-foundry`, `copilot-acp` |
+| External agent modes (ACP) | `claude`, `cursor`, `pi`, `opencode`, `grok`, `gemini`, `qwen`, `goose`, `kimi`, `droid`, `amp`, `kilo`, `cline`, `auggie`, `vibe`, `kiro`, `devin`, `qoder`, `codebuddy`, `minimax-code`, `junie`, `antigravity`, `cortex`, `poolside` |
 | Local | `ollama` (`:11434`), `lmstudio` (`:1234`), `llamacpp` (`:8080`), `vllm` (`:8000`) |
 | Anything else | `custom`: you supply the base URL and model; the key variable is `SILVER_API_KEY` |
 
@@ -62,7 +63,7 @@ the `llamacpp` preset works against a stock server.
 | `bedrock` | `bedrock` | SigV4-signed POST to `bedrock-runtime.<region>.amazonaws.com`, Anthropic Messages body, binary `vnd.amazon.eventstream` response. Credentials: `access-key:secret[:session-token]`, a Bedrock API key, or the `AWS_*` variables. Region from the base URL, then `AWS_REGION` |
 | `vertex` | `vertex` | RS256-signed service-account JWT exchanged for an OAuth2 token (cached until expiry), or an access token, `GOOGLE_APPLICATION_CREDENTIALS`, or the metadata server. Claude models use `:streamRawPredict`; others the OpenAI-compatible `endpoints/openapi` surface. Project and region from the base URL, then `VERTEX_PROJECT`/`GOOGLE_CLOUD_PROJECT` and `VERTEX_REGION` |
 | `codex` | `openai-codex` | ChatGPT sign-in (`/login openai-codex`): PKCE against `auth.openai.com` on `http://localhost:1455/auth/callback`, then the Responses API |
-| `acp` | `copilot-acp` | Spawns the program named by the base URL (`copilot --acp --stdio`, `COPILOT_CLI_PATH`, or any ACP agent such as `opencode acp`) and speaks newline-delimited JSON-RPC on stdio |
+| `acp` | `copilot-acp`, the external agent modes | Spawns the program named by the base URL — a stored command, a mode's own CLI, or `copilot --acp --stdio` (overridden by `COPILOT_CLI_PATH`) — and speaks newline-delimited JSON-RPC on stdio |
 | `opencode` | `opencode-zen`, `opencode-go` | One host, per-model API: Claude and Qwen on `/messages`, GPT, Grok and Muse on `/responses`, open models on `chat/completions`. Each request carries the conversation's cache key as `x-opencode-session` to keep the relay's prompt cache warm. Needs its own key (`OPENCODE_ZEN_API_KEY` / `OPENCODE_GO_API_KEY`); anonymous access ended |
 
 **`copilot-acp` runs its own loop.** silver's tools are not offered to the external agent, its tool
@@ -73,6 +74,53 @@ own `model` option.
 
 All transports share one TLS policy (`[security]`), redact the key from error bodies and truncate
 them, and never echo a 401/403 body.
+
+## External agent modes (ACP)
+
+Besides `copilot-acp`, silver can drive any of the coding-agent CLIs in the catalog as an ACP
+agent, spawning the CLI itself (local launch only — no npx/uvx registry downloads). The agent's
+session starts in the run's workspace, so a [Messages](messages.md) bot works in its own folder. Pick one in
+Settings → Providers like any preset; it needs no API key of silver's, the CLI holds its own
+credentials. A mode is used when its preset is active and no base URL override is stored: silver
+finds the CLI on your login shell's PATH (plus the usual install dirs, so a GUI-launched daemon
+sees it too) and runs it in its ACP mode. A mode whose CLI, or ACP support, is missing fails its
+first message with the install steps instead of a bare spawn error; `base_url` in `config.toml`
+([example](#configuration)) overrides the resolution with an explicit command.
+
+| Mode preset | Install | Sign in |
+| --- | --- | --- |
+| `claude` (Claude Code) | `curl -fsSL https://claude.ai/install.sh \| bash` | `claude auth login` |
+| `cursor` (Cursor) | `curl https://cursor.com/install -fsS \| bash` | `cursor-agent login` |
+| `pi` (Pi) | `npm install -g @earendil-works/pi-coding-agent` | run `pi`, type `/login` |
+| `opencode` (OpenCode) | `curl -fsSL https://opencode.ai/install \| bash` | `opencode auth login` |
+| `grok` (Grok Build) | `curl -fsSL https://x.ai/cli/install.sh \| bash` | `grok login --device-auth` |
+| `gemini` (Gemini CLI) | `npm install -g @google/gemini-cli` | run `gemini` |
+| `qwen` (Qwen Code) | `npm install -g @qwen-code/qwen-code` | run `qwen`, type `/auth` |
+| `goose` | `curl -fsSL https://github.com/aaif-goose/goose/releases/download/stable/download_cli.sh \| bash` | `goose configure` |
+| `kimi` (Kimi Code) | `curl -fsSL https://code.kimi.com/kimi-code/install.sh \| bash` | `kimi login` |
+| `droid` (Factory Droid) | `npm install -g droid` | run `droid` |
+| `amp` (Amp) | `curl -fsSL https://ampcode.com/install.sh \| bash` | `amp login` |
+| `kilo` (Kilo) | `npm install -g @kilocode/cli` | `kilo auth login` |
+| `cline` (Cline) | `npm install -g cline` | `cline auth` |
+| `auggie` (Auggie) | `npm install -g @augmentcode/auggie` | `auggie login` |
+| `vibe` (Mistral Vibe) | `curl -LsSf https://mistral.ai/vibe/install.sh \| bash` | `vibe --setup` |
+| `kiro` (Kiro CLI) | `curl -fsSL https://cli.kiro.dev/install \| bash` | `kiro-cli login` |
+| `devin` (Devin) | `curl -fsSL https://cli.devin.ai/install.sh \| bash` | `devin auth login` |
+| `qoder` (Qoder CLI) | `npm install -g @qoder-ai/qodercli` | `qodercli login` |
+| `codebuddy` (CodeBuddy Code) | `npm install -g @tencent-ai/codebuddy-code` | run `codebuddy` |
+| `minimax-code` (MiniMax Code) | `npm install -g @minimax-ai/code` | `mcode login` |
+| `junie` (Junie) | `curl -fsSL https://junie.jetbrains.com/install.sh \| bash` | run `junie` |
+| `antigravity` (Google Antigravity) | `curl -fsSL https://antigravity.google/cli/install.sh \| bash` | run `agy` |
+| `cortex` (Cortex Code) | `curl -LsS https://ai.snowflake.com/static/cc-scripts/install.sh \| sh` | run `cortex` |
+| `poolside` (Poolside) | `curl -fsSL https://downloads.poolside.ai/pool/install.sh \| sh` | `pool login` |
+
+**Claude Code** has no ACP mode in its own CLI, so silver runs it through the official adapter,
+`@agentclientprotocol/claude-agent-acp` (pinned to the version the
+[ACP registry](https://agentclientprotocol.com/registry) lists), which `npx` fetches on first use.
+It needs Node.js and the `claude` CLI signed in (`claude auth login`); the adapter uses that
+sign-in, so there is no key to give silver. Claude Code asks before it edits files or runs
+anything but read-only commands. Those requests reach you as approval cards in a
+[Messages](messages.md#other-coding-agents) bot, and are refused anywhere else.
 
 ## Signing in
 

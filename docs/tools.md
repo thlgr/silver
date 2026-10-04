@@ -7,8 +7,8 @@ code layout see [architecture.md](architecture.md).
 ## Tool set
 
 One `ToolRegistry` (`crates/silver-core/src/tools/mod.rs`) holds every tool. The daemon registers
-**21 tools**: 20 built in plus `delegate_task`, which exists only while `[delegation] enabled` is
-true. `GET /v1/tools` lists them all with their toolset and whether the [filters](#which-tools-a-run-sees)
+**23 tools**: 20 built in, `delegate_task`, which exists only while `[delegation] enabled` is true,
+and the two team tools, which only a bot's session in [Messages](messages.md) is given. `GET /v1/tools` lists them all with their toolset and whether the [filters](#which-tools-a-run-sees)
 leave them `enabled`; `GET /v1/capabilities` lists only the enabled ones.
 
 | Tool | Risk | Needs workspace | What it does |
@@ -32,6 +32,8 @@ leave them `enabled`; `GET /v1/capabilities` lists only the enabled ones.
 | `skill_manage` | write | no | Create, update or delete a skill |
 | `web_search`, `web_extract` | read | no | Search, and fetch a page as text |
 | `delegate_task` | read | no | Hand independent tasks to [subagents](#subagents) |
+| `list_bots` | read | no | The user's other [bots](messages.md#bots-asking-each-other): name, what each is for, status, folder |
+| `ask_bot` | read | no | Put a self-contained request to another bot and wait for its final reply (up to ten minutes) |
 
 A global (workspace-less) run sees only the tools that do not need a workspace; a workspace run
 sees the rest too. Pick a workspace in the web UI, or pass `workspace_id` to `POST /v1/runs`, to
