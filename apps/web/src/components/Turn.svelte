@@ -1,7 +1,7 @@
 <!-- One exchange: the user's prompt, the process steps, the final reply and its actions. -->
 <script>
   import { untrack } from 'svelte'
-  import { app, rewind, notify, attachmentSrc } from '../lib/state.svelte.js'
+  import { app, rewind, notify, attachmentSrc, currentWorkspace } from '../lib/state.svelte.js'
   import { authImage } from '../lib/api.js'
   import { markdown, copyCode } from '../lib/markdown.js'
   import { tokens, seconds, cost } from '../lib/format.js'
