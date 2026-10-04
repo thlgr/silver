@@ -1024,16 +1024,14 @@ impl RunManager {
         }
     }
 
-    /// Validate a session or create one bound to the requested scope (INV-3, INV-5). The second
-    /// value is true when this call created the session, so a caller can seed its first
-    /// conversation exactly once.
+    /// Validate a session or create one bound to the requested scope (INV-3, INV-5).
     pub(crate) async fn resolve_session(
         &self,
         session_id: Option<SessionId>,
         workspace_id: Option<WorkspaceId>,
         source: String,
         external_key: Option<String>,
-    ) -> CoreResult<(Session, bool)> {
+    ) -> CoreResult<Session> {
         if let Some(session_id) = session_id {
             let session = self
                 .db
@@ -1043,7 +1041,7 @@ impl RunManager {
             if session.workspace_id != workspace_id {
                 return Err(CoreError::SessionWorkspaceMismatch);
             }
-            return Ok((session, false));
+            return Ok(session);
         }
 
         if let Some(external_key) = &external_key {
@@ -1052,7 +1050,7 @@ impl RunManager {
                 .find_session_by_external_key(&source, external_key, workspace_id)
                 .await?
             {
-                return Ok((existing, false));
+                return Ok(existing);
             }
         }
 
@@ -1066,7 +1064,7 @@ impl RunManager {
             created_at: now,
             updated_at: now,
         };
-        Ok((self.db.create_session(session).await?, true))
+        Ok(self.db.create_session(session).await?)
     }
 
     async fn resolve_workspace(&self, id: Option<WorkspaceId>) -> CoreResult<Option<Workspace>> {
@@ -1233,7 +1231,7 @@ impl RunManager {
             .as_deref()
             .map(str::trim)
             .is_some_and(|effort| !effort.is_empty());
-        let (session, _created) = self
+        let session = self
             .resolve_session(
                 req.session_id,
                 req.workspace_id,
@@ -1726,8 +1724,7 @@ impl RunManager {
         }
     }
 
-    /// The approvals a run is waiting on, in any order. The AG-UI resume path answers every
-    /// one of them, since parallel subagents share the parent's gate.
+    /// The approvals a run is waiting on, in any order.
     pub fn pending_approvals(&self, run_id: RunId) -> Vec<ApprovalId> {
         self.registry.pending(run_id)
     }

@@ -63,17 +63,13 @@ pub enum ResumeStatus {
 
 /// The decision and optional answer a resume entry carries: `resolved` approves, `cancelled`
 /// denies, and a string `payload` answers an `ask_user_question` call.
-pub fn resume_decision(entry: &ResumeEntry) -> (ApprovalDecision, Option<String>) {
-    match entry.status {
-        ResumeStatus::Resolved => (
-            ApprovalDecision::Approve,
-            entry
-                .payload
-                .as_ref()
-                .and_then(serde_json::Value::as_str)
-                .map(str::to_string),
-        ),
-        ResumeStatus::Cancelled => (ApprovalDecision::Deny, None),
+pub fn resume_decision(entry: ResumeEntry) -> (ApprovalDecision, Option<String>) {
+    match (entry.status, entry.payload) {
+        (ResumeStatus::Resolved, Some(serde_json::Value::String(answer))) => {
+            (ApprovalDecision::Approve, Some(answer))
+        }
+        (ResumeStatus::Resolved, _) => (ApprovalDecision::Approve, None),
+        (ResumeStatus::Cancelled, _) => (ApprovalDecision::Deny, None),
     }
 }
 
@@ -326,12 +322,15 @@ fn content_plain_text(content: AguiContent) -> String {
 }
 
 /// Translates a silver run event stream into AG-UI events. Owns the stream state the protocol
-/// requires: whether a text or reasoning message is open, and whether the run has ended.
+/// requires: whether a text or reasoning message is open, which subagents are running, and
+/// whether the run has ended.
 pub struct Translator {
     thread_id: String,
     run_id: String,
     text_message_id: Option<String>,
     reasoning_message_id: Option<String>,
+    /// The `SUBAGENT_STARTED` events of the invocations still running.
+    subagents: Vec<serde_json::Value>,
     ended: bool,
 }
 
@@ -342,8 +341,29 @@ impl Translator {
             run_id,
             text_message_id: None,
             reasoning_message_id: None,
+            subagents: Vec::new(),
             ended: false,
         }
+    }
+
+    /// A translator for a run continuing past an interrupt, given the run's events up to it.
+    /// The subagents still running there were suspended by the interrupt and are reopened.
+    pub fn resuming(thread_id: String, run_id: String, before: &[RunEvent]) -> Self {
+        let mut translator = Self::new(thread_id, run_id);
+        for event in before {
+            if matches!(
+                event.payload,
+                EventPayload::SubagentStarted { .. } | EventPayload::SubagentCompleted { .. }
+            ) {
+                translator.push(event);
+            }
+        }
+        translator
+    }
+
+    /// The `SUBAGENT_STARTED` events a resumed stream reopens after `RUN_STARTED`.
+    pub fn open_subagents(&self) -> &[serde_json::Value] {
+        &self.subagents
     }
 
     /// The `RUN_STARTED` event that opens the stream. The protocol's identity fields come from
@@ -417,37 +437,28 @@ impl Translator {
                 agent,
                 description,
                 ..
-            } => subagent_started(tool_call_id, *index, agent, description),
+            } => {
+                let started = subagent_started(tool_call_id, *index, agent, description);
+                self.subagents.push(serde_json::Value::clone(&started));
+                vec![started]
+            }
             EventPayload::SubagentStep {
                 tool_call_id,
                 index,
                 event,
-            } => {
-                // An approval raised inside a subagent interrupts the run just like one raised
-                // directly, attributing the interrupt to the subagent's invocation.
-                if let EventPayload::ApprovalRequired {
-                    approval_id,
-                    tool_call_id: inner_call,
-                    description,
-                    ..
-                } = event.as_ref()
-                {
-                    return self.interrupt_approval(
-                        approval_id,
-                        inner_call,
-                        description,
-                        Some(&subagent_run_id(tool_call_id, *index)),
-                    );
-                }
-                attributed_steps(event, &subagent_run_id(tool_call_id, *index))
-            }
+            } => self.subagent_step(&subagent_run_id(tool_call_id, *index), event),
             EventPayload::SubagentCompleted {
                 tool_call_id,
                 index,
                 status,
                 summary,
                 ..
-            } => subagent_completed(tool_call_id, *index, *status, summary),
+            } => {
+                let id = subagent_run_id(tool_call_id, *index);
+                self.subagents
+                    .retain(|started| started["subagentRunId"] != id);
+                subagent_completed(&id, *status, summary)
+            }
             EventPayload::RunCompleted { usage, .. } => self.finish_run(usage.as_ref()),
             EventPayload::RunFailed { code, message } => self.fail_run(code, message),
             EventPayload::RunCancelled { .. } => {
@@ -468,6 +479,30 @@ impl Translator {
         }
     }
 
+    /// One of a subagent's own events, attributed to its invocation. An approval it raises
+    /// interrupts the run like one raised directly.
+    fn subagent_step(
+        &mut self,
+        subagent_run_id: &str,
+        event: &EventPayload,
+    ) -> Vec<serde_json::Value> {
+        if let EventPayload::ApprovalRequired {
+            approval_id,
+            tool_call_id,
+            description,
+            ..
+        } = event
+        {
+            return self.interrupt_approval(
+                approval_id,
+                tool_call_id,
+                description,
+                Some(subagent_run_id),
+            );
+        }
+        attributed_steps(event, subagent_run_id)
+    }
+
     /// Close the stream for a run waiting on outside input: `RUN_FINISHED` with the interrupt
     /// outcome, answered on a later run's `resume` list. An approval raised inside a subagent
     /// attributes the interrupt to that invocation.
@@ -480,6 +515,20 @@ impl Translator {
     ) -> Vec<serde_json::Value> {
         self.ended = true;
         let mut out = self.close_open_messages();
+        // The interrupt ends this stream, not the subagents: each running one is suspended
+        // (clients refuse RUN_FINISHED while one is open), and the asking one names the interrupt.
+        for started in std::mem::take(&mut self.subagents) {
+            let id = &started["subagentRunId"];
+            let mut outcome = serde_json::json!({ "type": "suspended" });
+            if subagent_run_id.is_some_and(|asking| id == asking) {
+                outcome["interruptIds"] = serde_json::json!([approval_id]);
+            }
+            out.push(serde_json::json!({
+                "type": "SUBAGENT_FINISHED",
+                "subagentRunId": id,
+                "outcome": outcome,
+            }));
+        }
         let mut interrupt = serde_json::json!({
             "id": approval_id,
             "reason": "approval",
@@ -657,28 +706,26 @@ fn subagent_started(
     index: u32,
     agent: &str,
     description: &str,
-) -> Vec<serde_json::Value> {
-    let mut out = vec![serde_json::json!({
+) -> serde_json::Value {
+    let mut started = serde_json::json!({
         "type": "SUBAGENT_STARTED",
         "subagentRunId": subagent_run_id(tool_call_id, index),
         "name": agent,
         "parentToolCallId": tool_call_id,
-    })];
+    });
     if !description.is_empty() {
-        out[0]["description"] = serde_json::json!(description);
+        started["description"] = serde_json::json!(description);
     }
-    out
+    started
 }
 
 /// The event closing one invocation: `SUBAGENT_FINISHED` on success, `SUBAGENT_ERROR` with a
 /// status-derived code when it failed or was refused.
 fn subagent_completed(
-    tool_call_id: &ToolCallId,
-    index: u32,
+    subagent_run_id: &str,
     status: ToolStatus,
     summary: &str,
 ) -> Vec<serde_json::Value> {
-    let subagent_run_id = subagent_run_id(tool_call_id, index);
     match status {
         silver_protocol::ToolStatus::Completed => vec![serde_json::json!({
             "type": "SUBAGENT_FINISHED",
@@ -1166,7 +1213,7 @@ mod tests {
             status: ResumeStatus::Resolved,
             payload: Some(serde_json::json!("yes")),
         };
-        let (decision, answer) = resume_decision(&resolved);
+        let (decision, answer) = resume_decision(resolved);
         assert_eq!(decision, ApprovalDecision::Approve);
         assert_eq!(answer.as_deref(), Some("yes"));
 
@@ -1175,7 +1222,7 @@ mod tests {
             status: ResumeStatus::Resolved,
             payload: None,
         };
-        let (decision, answer) = resume_decision(&resolved_quiet);
+        let (decision, answer) = resume_decision(resolved_quiet);
         assert_eq!(decision, ApprovalDecision::Approve);
         assert!(answer.is_none());
 
@@ -1184,18 +1231,27 @@ mod tests {
             status: ResumeStatus::Cancelled,
             payload: None,
         };
-        let (decision, answer) = resume_decision(&cancelled);
+        let (decision, answer) = resume_decision(cancelled);
         assert_eq!(decision, ApprovalDecision::Deny);
         assert!(answer.is_none());
     }
 
     #[test]
-    fn translator_interrupts_on_a_subagent_approval() {
-        let mut t = Translator::new("thr-1".into(), "run-1".into());
+    fn translator_suspends_subagents_at_an_interrupt_and_reopens_them_on_resume() {
+        let started = |index| {
+            silver_event(EventPayload::SubagentStarted {
+                tool_call_id: ToolCallId("call_del".into()),
+                index,
+                agent: "general-purpose".into(),
+                description: String::new(),
+                model: "mock-model".into(),
+                worktree: None,
+            })
+        };
         let approval_id = silver_protocol::ApprovalId::new();
-        let out = t.push(&silver_event(EventPayload::SubagentStep {
+        let asked = silver_event(EventPayload::SubagentStep {
             tool_call_id: ToolCallId("call_del".into()),
-            index: 0,
+            index: 1,
             event: Box::new(EventPayload::ApprovalRequired {
                 approval_id,
                 tool_call_id: ToolCallId("call_inner".into()),
@@ -1204,13 +1260,40 @@ mod tests {
                 description: "install skill x".into(),
                 arguments_preview: serde_json::json!({}),
             }),
-        }));
-        assert_eq!(out[0]["type"], "RUN_FINISHED");
-        assert_eq!(out[0]["outcome"]["type"], "interrupt");
-        let interrupt = &out[0]["outcome"]["interrupts"][0];
+        });
+        let log = vec![started(0), started(1), asked];
+
+        let mut t = Translator::new("thr-1".into(), "run-1".into());
+        let out: Vec<_> = log.iter().flat_map(|event| t.push(event)).collect();
+        let types: Vec<&str> = out.iter().map(|v| v["type"].as_str().unwrap()).collect();
+        assert_eq!(
+            types,
+            vec![
+                "SUBAGENT_STARTED",
+                "SUBAGENT_STARTED",
+                "SUBAGENT_FINISHED",
+                "SUBAGENT_FINISHED",
+                "RUN_FINISHED"
+            ]
+        );
+        // Both invocations are suspended; only the one that asked names the interrupt.
+        assert_eq!(out[2]["outcome"]["type"], "suspended");
+        assert!(out[2]["outcome"].get("interruptIds").is_none());
+        assert_eq!(out[3]["subagentRunId"], "call_del:1");
+        assert_eq!(
+            out[3]["outcome"]["interruptIds"][0],
+            approval_id.to_string()
+        );
+        let interrupt = &out[4]["outcome"]["interrupts"][0];
         assert_eq!(interrupt["id"], approval_id.to_string());
-        assert_eq!(interrupt["subagentRunId"], "call_del:0");
+        assert_eq!(interrupt["subagentRunId"], "call_del:1");
         assert_eq!(interrupt["toolCallId"], "call_inner");
         assert!(t.ended);
+
+        // The resumed stream reopens both before the continuation finishes them.
+        let resumed = Translator::resuming("thr-1".into(), "run-2".into(), &log);
+        assert_eq!(resumed.open_subagents().len(), 2);
+        assert_eq!(resumed.open_subagents()[1]["subagentRunId"], "call_del:1");
+        assert!(!resumed.is_ended());
     }
 }

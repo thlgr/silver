@@ -24,15 +24,15 @@ The response is `200 text/event-stream`; each SSE `data:` payload is exactly one
     data: {"type":"RUN_FINISHED","threadId":"my-thread","runId":"run-1"}
 
 The stream closes after the run's terminal event (`RUN_FINISHED` or `RUN_ERROR`). A `threadId`
-keeps its conversation: the session is keyed by it, the first run's `messages` seed the
-conversation, and every later run appends its trailing user message to the transcript silver
+keeps its conversation: the session is keyed by it, `messages` seed the conversation while the
+session has none, and every later run appends its trailing user message to the transcript silver
 already built. Messages edited or branched in the client after the first run are not reflected.
 
 ### Errors
 
 A request rejected before the run starts — malformed JSON, a schema violation, an empty
 `messages`, a last message that is not a `user` message, a busy thread, or a resume list that
-names an unknown interrupt or leaves one unanswered — is an HTTP error status with no stream,
+names an unknown interrupt or skips one — is an HTTP error status with no stream,
 using the [silver error envelope](api.md#errors). A failure after the run starts travels
 in-stream as `RUN_ERROR` with the silver error code as `code`.
 
@@ -51,7 +51,10 @@ credential configured, requests must present it in an Authorization header.
   shows in its own UI; the full arguments live in the session transcript.
 - Subagents: `SUBAGENT_STARTED` (with `parentToolCallId` pointing at its `delegate_task` call)
   / `SUBAGENT_FINISHED` / `SUBAGENT_ERROR`, and a subagent's tool calls stream as `TOOL_CALL_*`
-  events attributed with the subagent's `subagentRunId` (minted as `<toolCallId>:<index>`).
+  events attributed with the subagent's `subagentRunId` (minted as `<toolCallId>:<index>`). An
+  interrupt suspends every running subagent (`SUBAGENT_FINISHED` with a `suspended` outcome,
+  naming the interrupt on the one that asked), and the resumed stream reopens them with
+  `SUBAGENT_STARTED` before their work continues.
 - Interrupt/resume for approvals: a tool call that needs approval — inside the run or inside a
   subagent (the interrupt then carries the subagent's `subagentRunId`) — ends the run with
   `RUN_FINISHED` whose outcome is the interrupt, carrying the approval id as the interrupt id
@@ -59,15 +62,16 @@ credential configured, requests must present it in an Authorization header.
   until answered. The next input on the same thread answers it with `resume`:
 
       {"threadId": "my-thread", "runId": "run-2",
-       "resume": [{"interruptId": "<approval id>", "status": "resolved"}],
-       "messages": [{"role": "user", "content": "continue"}]}
+       "resume": [{"interruptId": "<approval id>", "status": "resolved"}], "messages": []}
 
   `resolved` approves (a string `payload` answers an `ask_user_question` call), `cancelled`
-  denies, and the connection then streams the parked run's continuation to its end. Every
-  pending approval of the thread needs an entry: one naming an unknown or expired interrupt,
-  one answered twice, or a pending one left unanswered all refuse the input before anything is
-  decided. The same approval ids also appear on the session's runs, so they can be answered
-  through the web UI or [the API](api.md) instead.
+  denies, and the connection then streams the parked run's continuation, to its end or to its
+  next interrupt. `messages` is required by the schema but ignored on resume. An entry naming an
+  unknown or expired interrupt, or answering one twice, refuses the input before anything is
+  decided. Parallel subagents can wait on several approvals at once: the stream announces the
+  first, and answering it continues the run, whose stream announces the next as a new interrupt.
+  The same approval ids also appear on the session's runs, so they can be answered through the
+  web UI or [the API](api.md) instead.
 - The `context` and `forwardedProps` input fields are injected into the run's system prompt
   (a `# Application Context` block), so the model sees ambient application state.
 - Unknown input members are ignored, per the protocol's processing model.

@@ -19,7 +19,7 @@ use silver_core::{error::CoreError, session::Session};
 use silver_protocol::{
     ApprovalDecisionRequest, ApprovalId, CreateRunRequest, EventPayload, MessageInput,
 };
-use std::{collections::BTreeSet, convert::Infallible, sync::Arc, time::Duration};
+use std::{convert::Infallible, sync::Arc, time::Duration};
 
 pub async fn run(
     State(state): State<AppState>,
@@ -41,7 +41,7 @@ pub async fn run(
             "threadId and runId are required".into(),
         )));
     }
-    let (session, fresh) = state
+    let session = state
         .runs
         .resolve_session(
             None,
@@ -80,10 +80,10 @@ pub async fn run(
     }
 
     let (seed, prompt) = split_input(messages, session.id).map_err(CoreError::InvalidRequest)?;
-    // Seed the conversation only when this call created the session: after the first run the
-    // transcript silver builds is authoritative; rewriting it from the client's copy would
-    // degrade it. Earlier messages edited or branched in the client are not reflected.
-    if fresh {
+    // Seed the conversation while the session has none, so a rejected first request does not
+    // lose it. After that the transcript silver builds is authoritative: rewriting it from the
+    // client's copy would degrade it. Earlier messages edited in the client are not reflected.
+    if state.db.list_messages(session.id, 1).await?.is_empty() {
         for message in seed {
             state.db.append_message(message).await?;
         }
@@ -121,8 +121,8 @@ pub async fn run(
 }
 
 /// Answer a resuming input: every entry must name a pending approval of this thread's active
-/// run, nothing may be left unanswered, and only when the whole list checks out are the
-/// decisions applied. The run's continuation then streams to its end on this connection.
+/// run, and only when the whole list checks out are the decisions applied. The run's
+/// continuation then streams on this connection, to its end or to its next interrupt.
 async fn resume_run(
     state: &AppState,
     session: Session,
@@ -137,15 +137,14 @@ async fn resume_run(
         .session_active_runs(&[session.id])
         .await?
         .remove(&session.id)
-        .ok_or(ApiFailure(CoreError::InvalidRequest(
-            "resume answers an interrupt this thread has not raised; the interrupted run is no longer waiting".into(),
-        )))?;
-    let pending: BTreeSet<ApprovalId> = state
-        .runs
-        .pending_approvals(active_run)
-        .into_iter()
-        .collect();
-    let mut answered: BTreeSet<ApprovalId> = BTreeSet::new();
+        .ok_or_else(|| {
+            ApiFailure(CoreError::InvalidRequest(
+                "resume answers an interrupt this thread has not raised; the interrupted run is \
+                 no longer waiting"
+                    .into(),
+            ))
+        })?;
+    let pending = state.runs.pending_approvals(active_run);
     let mut decisions: Vec<ApprovalDecisionRequest> = Vec::new();
     for entry in resume {
         let approval_id = entry.interrupt_id.parse::<ApprovalId>().map_err(|_parse| {
@@ -160,26 +159,46 @@ async fn resume_run(
                 entry.interrupt_id
             ))));
         }
-        if !answered.insert(approval_id) {
+        if decisions
+            .iter()
+            .any(|known| known.approval_id == approval_id)
+        {
             return Err(ApiFailure(CoreError::InvalidRequest(format!(
                 "resume answers interrupt {} more than once",
                 entry.interrupt_id
             ))));
         }
-        let (decision, answer) = resume_decision(&entry);
+        let (decision, answer) = resume_decision(entry);
         decisions.push(ApprovalDecisionRequest {
             approval_id,
             decision,
             answer,
         });
     }
-    for pending_id in pending {
-        if !answered.contains(&pending_id) {
-            return Err(ApiFailure(CoreError::InvalidRequest(
-                "resume leaves an interrupt unanswered; every pending approval needs an entry"
-                    .into(),
-            )));
-        }
+
+    // Stream from the latest interrupt answered here. A pending approval raised after it (a
+    // parallel subagent's, never shown) is announced by the replay as the next interrupt; one
+    // raised before it would be skipped, so it must be answered now.
+    let events = state.db.list_events_after(active_run, 0).await?;
+    let raised_at = |id: ApprovalId| {
+        events
+            .iter()
+            .find(|event| raised_approval(&event.payload) == Some(id))
+            .map(|event| event.event_id.0)
+    };
+    let answered = |id: ApprovalId| decisions.iter().any(|known| known.approval_id == id);
+    let resume_after = decisions
+        .iter()
+        .filter_map(|request| raised_at(request.approval_id))
+        .max()
+        .unwrap_or(0);
+    if let Some(skipped) = pending
+        .iter()
+        .find(|id| !answered(**id) && raised_at(**id).is_some_and(|at| at <= resume_after))
+    {
+        return Err(ApiFailure(CoreError::InvalidRequest(format!(
+            "resume leaves interrupt {skipped} unanswered; answer it in the same resume input"
+        ))));
     }
     // The whole list validated; only now are the decisions applied.
     for request in decisions {
@@ -189,38 +208,30 @@ async fn resume_run(
             .map_err(ApiFailure)?;
     }
 
-    // Stream the run from after its last interrupt, so the continuation the answers unblocked
-    // is everything the client has not seen. Approvals raised inside subagents count too.
-    let events = state.db.list_events_after(active_run, 0).await?;
-    let resume_after = events
-        .iter()
-        .filter(|event| is_approval_event(&event.payload))
-        .map(|event| event.event_id.0)
-        .max()
-        .unwrap_or(0);
+    let seen = events.partition_point(|event| event.event_id.0 <= resume_after);
+    let translator = Translator::resuming(thread_id, run_id, &events[..seen]);
     let subscription = state.runs.subscribe(active_run, Some(resume_after)).await?;
-    let translator = Translator::new(thread_id, run_id);
     Ok(sse_response(translate_stream(subscription, translator)))
 }
 
-/// Whether an event is a permission-required one, top-level or raised inside a subagent.
-fn is_approval_event(payload: &EventPayload) -> bool {
-    matches!(payload, EventPayload::ApprovalRequired { .. })
-        || matches!(
-            payload,
-            EventPayload::SubagentStep { event, .. }
-                if matches!(event.as_ref(), EventPayload::ApprovalRequired { .. })
-        )
+/// The approval an event asks for, raised by the run itself or inside a subagent.
+fn raised_approval(payload: &EventPayload) -> Option<ApprovalId> {
+    match payload {
+        EventPayload::ApprovalRequired { approval_id, .. } => Some(*approval_id),
+        EventPayload::SubagentStep { event, .. } => raised_approval(event),
+        _ => None,
+    }
 }
 
-/// The SSE stream of one AG-UI exchange: `RUN_STARTED` first, then every translated event until
-/// the run's terminal event closes the stream.
+/// The SSE stream of one AG-UI exchange: `RUN_STARTED` (and the subagents a resumed run
+/// reopens) first, then every translated event until the run's terminal event closes it.
 fn translate_stream(
     subscription: crate::run_manager::EventSubscription,
     translator: Translator,
 ) -> impl Stream<Item = Result<Event, Infallible>> + Send {
-    let started = translator.run_started();
-    let first = stream::once(futures::future::ready(Ok(frame(&started))));
+    let mut opening = vec![frame(&translator.run_started())];
+    opening.extend(translator.open_subagents().iter().map(frame));
+    let first = stream::iter(opening.into_iter().map(Ok));
     let rest = stream::unfold(
         (subscription, translator),
         |(mut subscription, mut translator)| async move {
