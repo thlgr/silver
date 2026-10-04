@@ -91,8 +91,9 @@ error. A failed request is an error, never a made-up answer, and is not retried.
   card with its options. The roster row turns amber while a bot waits for you.
 - When the window is not in front, the browser can notify you when a bot needs you, fails or
   finishes. It asks for permission the first time you send a message.
-- Bots with a workspace take files: the paperclip, dropping files on the box, or pasting an image
-  stores them under `.silver/attachments/` and names them in the message, as in the workbench.
+- Bots with a workspace take files: the paperclip, dropping files anywhere in the window, or
+  pasting an image stores them under `.silver/attachments/` and names them in the message, as
+  in the workbench.
 
 ## Reading and unread
 

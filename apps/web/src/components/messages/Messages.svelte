@@ -3,7 +3,8 @@
 <script>
   import { onMount } from 'svelte'
   import { app } from '../../lib/state.svelte.js'
-  import { botById, chat, startChat, stopChat, unreadTotal } from '../../lib/chat.svelte.js'
+  import { botById, addFiles, chat, isFileDrag, laneKey, startChat, stopChat, storeFiles, unreadTotal } from '../../lib/chat.svelte.js'
+  import { notify } from '../../lib/state.svelte.js'
   import Avatar from './Avatar.svelte'
   import BotEditor from './BotEditor.svelte'
   import Conversation from './Conversation.svelte'
@@ -20,10 +21,30 @@
   let narrow = $state(phone.matches)
   let width = $state(1000) // of the area beside the roster
   let details = $state(false)
+  let windowOver = $state(false) // a file drag is over the window; the drop lands in the chat's box
   const bot = $derived(chat.selected ? botById(chat.selected) : null)
   // A panel sits beside the conversation when there is room, and over it when there is not.
   const wide = $derived(width >= 680 && !narrow)
   const panel = $derived(bot ? (chat.thread ? 'thread' : details ? 'details' : null) : null)
+
+  // A dragged file is dropped anywhere in the window, not just on the box: nothing navigates
+  // away, and when there is nowhere to store it the user is told why.
+  const dragOver = (e) => {
+    if (!isFileDrag(e)) return
+    e.preventDefault()
+    windowOver = true
+  }
+  const dropFiles = async (event) => {
+    windowOver = false
+    if (!isFileDrag(event)) return
+    event.preventDefault()
+    const list = [...(event.dataTransfer?.files ?? [])]
+    if (!list.length) return
+    const open = botById(chat.selected)
+    if (open?.kind !== 'agent' || !open.workspace_id) return notify('Attachments need a bot with a workspace', true)
+    const stored = await storeFiles(open.workspace_id, list)
+    if (stored.length) addFiles(laneKey(open.id, chat.thread), stored)
+  }
 
   onMount(() => {
     const onchange = () => {
@@ -69,7 +90,7 @@
 
 <svelte:window onkeydown={(e) => e.key === 'Escape' && chat.thread && !chat.editor && !chat.trace && (chat.thread = null)} />
 
-<div class="messages" class:narrow style:--side="{widthOf()}px">
+<div class="messages" class:narrow class:dropping={windowOver} ondragover={dragOver} ondrop={dropFiles} style:--side="{widthOf()}px">
   {#if !narrow || (!bot && !chat.composing)}
     <div class="side">
       <Roster />
@@ -137,6 +158,20 @@
   .aside.over { position: absolute; inset: 0; z-index: 20; border-left: 0; animation: slide 0.25s var(--m-spring); }
   @keyframes slide { from { transform: translateX(32px); opacity: 0; } }
   .welcome { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px; height: 100%; padding: 32px; text-align: center; }
+  .messages.dropping::after {
+    content: 'Drop to attach';
+    position: fixed;
+    inset: 0;
+    z-index: 50;
+    display: grid;
+    place-items: center;
+    background: color-mix(in srgb, var(--m-fill) 12%, transparent);
+    backdrop-filter: blur(2px);
+    color: var(--m-text);
+    font-size: 15px;
+    font-weight: 600;
+    pointer-events: none;
+  }
   .crew { display: flex; }
   .crew > :global(canvas + canvas) { margin-left: -10px; }
   h1 { margin: 0; font-size: 22px; font-weight: 650; }

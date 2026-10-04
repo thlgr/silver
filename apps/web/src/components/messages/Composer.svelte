@@ -1,8 +1,8 @@
 <!-- The message box under a chat or a thread: send, or stop while the bot (or the group) is
      working there. In a group, typing @ suggests its bots. -->
 <script>
-  import { botById, membersOf, send, stop, workingIn } from '../../lib/chat.svelte.js'
-  import { attachmentNote, getDraft, notify, setDraft, storeAttachment } from '../../lib/state.svelte.js'
+  import { addFiles, botById, isFileDrag, laneKey, membersOf, removeFile, send, stop, storeFiles, workingIn } from '../../lib/chat.svelte.js'
+  import { attachmentNote, getDraft, notify, setDraft } from '../../lib/state.svelte.js'
   import Avatar from './Avatar.svelte'
   import IconSend from '~icons/lucide/arrow-up'
   import IconClip from '~icons/lucide/paperclip'
@@ -13,11 +13,12 @@
   const bot = $derived(botById(botId))
   const group = $derived(bot?.kind === 'group')
   const key = $derived(`chat:${botId}${thread ? `/${thread}` : ''}`)
+  const fileKey = $derived(laneKey(botId, thread))
   const working = $derived(bot ? workingIn(bot, thread) : false)
   let text = $state('')
   let box = $state()
   let picker = $state()
-  let files = $state([]) // stored in the bot's folder, going out with the next message
+  const files = $derived(chat.files[fileKey] ?? [])
   let over = $state(false)
 
   // One draft per chat or thread, kept across switching.
@@ -58,37 +59,36 @@
   }
 
   async function attach(list) {
-    for (const file of list) {
-      try {
-        files.push(await storeAttachment(folder, file))
-      } catch (e) {
-        notify(e.message, true)
-      }
-    }
+    addFiles(fileKey, await storeFiles(folder, list))
   }
 
   const dropped = (event) => {
     over = false
-    if (folder && event.dataTransfer?.files.length) {
-      event.preventDefault()
-      attach([...event.dataTransfer.files])
-    }
+    if (!isFileDrag(event)) return
+    event.preventDefault()
+    if (!folder) return notify('Attachments need a bot with a workspace', true)
+    attach([...event.dataTransfer.files])
+  }
+  const dragLeave = (event) => {
+    // Moving onto a child of the box fires this too; only leaving the box clears the outline.
+    if (!event.currentTarget.contains(event.relatedTarget)) over = false
   }
   const pasted = (event) => {
-    const images = folder ? [...(event.clipboardData?.files ?? [])].filter((file) => file.type.startsWith('image/')) : []
-    if (images.length) {
-      event.preventDefault()
-      attach(images)
-    }
+    const images = [...(event.clipboardData?.files ?? [])].filter((file) => file.type.startsWith('image/'))
+    if (!images.length) return
+    event.preventDefault()
+    if (!folder) return notify('Attachments need a bot with a workspace', true)
+    attach(images)
   }
 
   function submit() {
     if (empty) return
     // The words, then a marker line per file: the bot reads the path with a tool.
-    const lines = [text.trim() || 'Look at the attached file.', ...files.splice(0).map(attachmentNote)]
+    const lines = [text.trim() || 'Look at the attached file.', ...files.map(attachmentNote)]
     send(botId, lines.join('\n'), thread)
     text = ''
     setDraft(key, '')
+    chat.files[fileKey] = []
     onsent?.()
   }
 
@@ -106,7 +106,7 @@
 </script>
 
 <!-- svelte-ignore a11y_no_static_element_interactions -->
-<div class="composer" ondragover={(e) => folder && (e.preventDefault(), (over = true))} ondragleave={() => (over = false)} ondrop={dropped}>
+<div class="composer" ondragover={(e) => isFileDrag(e) && (e.preventDefault(), (over = true))} ondragleave={dragLeave} ondrop={dropped}>
   {#if suggestions.length}
     <div class="mentions">
       {#each suggestions as member (member.id)}
@@ -122,7 +122,7 @@
         <span class="file">
           {#if file.preview}<img src={file.preview} alt="" />{:else}<IconClip />{/if}
           <span>{file.name}</span>
-          <button type="button" title="Remove" aria-label="Remove {file.name}" onclick={() => files.splice(i, 1)}><IconX /></button>
+          <button type="button" title="Remove" aria-label="Remove {file.name}" onclick={() => removeFile(fileKey, i)}><IconX /></button>
         </span>
       {/each}
     </div>

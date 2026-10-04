@@ -2,7 +2,7 @@
 // routes and decides everything (who answers, who is mentioned, what counts as unread); this
 // only holds what it was told and what is on screen. Components read `chat` and call these.
 import { api, subscribeChat } from './api.js'
-import { buildTurns, notify } from './state.svelte.js'
+import { buildTurns, notify, storeAttachment } from './state.svelte.js'
 
 const PAGE = 50
 
@@ -14,6 +14,7 @@ export const chat = $state({
   selected: null, // the open bot's id
   thread: null, // the open thread's root entry id, in the selected chat
   lanes: {}, // lane key -> { entries, complete }, for every chat or thread that was opened
+  files: {}, // lane key -> attached files, stored in the bot's folder, going out with the next message
   query: '', // the roster search
   editor: null, // { bot, workspace } (null bot: a new one, in `workspace` when given) or { group } (null group: a new one)
   trace: null, // { title, turns } while "Full conversation" is open
@@ -23,6 +24,36 @@ export const chat = $state({
 export const laneKey = (botId, thread = null) => (thread ? `${botId}/${thread}` : botId)
 
 const lane = (key) => (chat.lanes[key] ??= { entries: [], complete: false })
+
+// The files attached to a chat or thread, stored in its bot's folder.
+const laneFiles = (key) => (chat.files[key] ??= [])
+
+/** Add files already stored in the bot's folder to what the next message carries. */
+export function addFiles(key, list) {
+  laneFiles(key).push(...list)
+}
+
+export function removeFile(key, at) {
+  laneFiles(key).splice(at, 1)
+}
+
+/** During a drag the browser hides the files, so the `Files` type is the only honest test:
+ *  answering true for dragged text would swallow a drop the textarea should handle itself. */
+export const isFileDrag = (e) => [...(e.dataTransfer?.types ?? [])].includes('Files')
+
+/** Store files into a workspace's .silver/attachments; a file that fails reports itself and
+ *  is left out of the returned list. */
+export async function storeFiles(workspace, list) {
+  const stored = []
+  for (const file of list) {
+    try {
+      stored.push(await storeAttachment(workspace, file))
+    } catch (e) {
+      notify(e.message, true)
+    }
+  }
+  return stored
+}
 
 export const botById = (id) => chat.bots.find((bot) => bot.id === id)
 
@@ -106,7 +137,10 @@ function alert(before, bot) {
 
 function dropBot(id) {
   chat.bots = chat.bots.filter((bot) => bot.id !== id)
-  for (const key of Object.keys(chat.lanes)) if (key === id || key.startsWith(`${id}/`)) delete chat.lanes[key]
+  for (const key of Object.keys(chat.lanes)) {
+    if (key === id || key.startsWith(`${id}/`)) delete chat.lanes[key]
+    if (key === id || key.startsWith(`${id}/`)) delete chat.files[key]
+  }
   if (chat.selected === id) chat.selected = chat.thread = null
 }
 
