@@ -1,6 +1,7 @@
 //! The HTTP/SSE contract between the silver server and its web UI. The agent loop emits the same
 //! RunEvent values that go onto the SSE stream and are persisted for replay.
 
+pub mod chat;
 pub mod commands;
 pub mod providers;
 

@@ -25,6 +25,9 @@ pub struct ToolServices {
     /// The subagents a run may delegate to, and the runner that starts them. A missing
     /// backend means the delegate_task tool is not registered at all.
     pub subagents: Option<Arc<dyn crate::subagent::Subagents>>,
+    /// The user's chat bots, which a bot's run may ask for help. A missing backend means the
+    /// team tools are not available.
+    pub team: Option<Arc<dyn Team>>,
     /// Extra parent environment variables a tool-spawned child may keep, on top of
     /// `tools::command::PRESERVED_ENV`. Empty means the allow-list alone.
     pub env_passthrough: Vec<String>,
@@ -34,6 +37,35 @@ pub struct ToolServices {
     pub session_search: Option<Arc<dyn crate::session::SessionSearch>>,
     /// Absent when the daemon has no document store; the search_documents tool then says so.
     pub documents: Option<Arc<dyn DocumentIndex>>,
+}
+
+/// One bot another bot can ask for help.
+#[derive(Clone, Debug)]
+pub struct TeamBot {
+    pub id: String,
+    pub name: String,
+    pub description: String,
+    /// `idle`, `working`, `needs_input` or `error`.
+    pub status: String,
+    /// The project folder it works in, if it has one.
+    pub folder: Option<String>,
+}
+
+/// The user's chat bots, from the point of view of the bot whose run is calling.
+#[async_trait::async_trait]
+pub trait Team: Send + Sync {
+    /// The bots the calling bot can ask: every other one.
+    async fn bots(&self, from: &crate::session::Session) -> CoreResult<Vec<TeamBot>>;
+
+    /// Put `message` to the bot named by `bot` (its id or its name) and wait for its final
+    /// reply. Cancelling `cancel` withdraws the request.
+    async fn ask(
+        &self,
+        from: &crate::session::Session,
+        bot: &str,
+        message: &str,
+        cancel: &tokio_util::sync::CancellationToken,
+    ) -> CoreResult<String>;
 }
 
 /// What a mutating file tool is about to do to one path. The string form is persisted in

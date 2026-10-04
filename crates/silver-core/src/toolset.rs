@@ -34,7 +34,7 @@ pub fn builtin_toolset_for(tool_name: &str) -> &'static str {
         "web_search" | "web_extract" => WEB,
         "memory" | "session_search" | "search_documents" => MEMORY,
         "skills_list" | "skill_view" | "skill_manage" => SKILLS,
-        "delegate_task" => DELEGATION,
+        "delegate_task" | "list_bots" | "ask_bot" => DELEGATION,
         name if name == MCP || name.starts_with("mcp_") || name.starts_with("mcp-") => MCP,
         _ => CORE,
     }
