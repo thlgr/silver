@@ -1161,6 +1161,12 @@ impl RunManager {
         let agent = self
             .build_run_agent(&run_preset, run_effort, &provider, &model)
             .await;
+        // Only a bot in the chat has a team to ask.
+        let agent = if session.source == crate::chat::SESSION_SOURCE {
+            agent
+        } else {
+            Arc::new(Agent::clone(&agent).without_tools(&silver_core::tools::team::TEAM_TOOLS))
+        };
         let services = self.run_services(run_preset);
 
         let task = RunTask {

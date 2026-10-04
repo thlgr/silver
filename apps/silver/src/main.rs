@@ -53,6 +53,9 @@ struct Args {
 async fn main() -> anyhow::Result<()> {
     let args = Args::parse();
     let (config, config_path, data_dir, frozen_yolo) = load_config(args)?;
+    // Mode CLIs (opencode, grok, ...) come from the login shell's PATH, which a GUI-launched
+    // process does not have; hydrate once so resolving an ACP mode never stalls a request.
+    silver::agent_modes::hydrate_path();
 
     // Opt-in monitoring: off unless [monitoring] enabled with an endpoint. The emitter is a
     // global so producers and the run watcher can reach it without a threaded handle.
@@ -114,7 +117,8 @@ async fn main() -> anyhow::Result<()> {
 
     configure_lsp(&config);
     let (subagents, agent_store) = build_subagents(Arc::clone(&agent), &config, subagent_config);
-    let services = build_services(
+    let chat = silver::chat::ChatHub::new(Db::clone(&db));
+    let mut services = build_services(
         &config,
         skills,
         Arc::clone(&checkpoints),
@@ -123,6 +127,7 @@ async fn main() -> anyhow::Result<()> {
         search,
         documents,
     );
+    services.team = Some(Arc::new(silver::chat::TeamBackend(Arc::clone(&chat))));
     let runs = build_run_manager(
         Db::clone(&db),
         agent,
@@ -143,8 +148,12 @@ async fn main() -> anyhow::Result<()> {
             "emergency stop is engaged; new runs are held until resumed"
         );
     }
+    chat.attach(Arc::clone(&runs));
+    silver::acp::set_broker(Arc::<silver::chat::ChatHub>::clone(&chat));
+    chat.recover().await?;
     let state = AppState {
         db,
+        chat,
         runs: Arc::clone(&runs),
         config: Arc::clone(&config),
         memory: fs_memory,
@@ -344,6 +353,7 @@ struct Endpoint {
 impl Endpoint {
     fn transport(&self, key: &str) -> Arc<dyn Model> {
         build_transport(self.kind, &self.base_url, key, &self.model_name, &self.http)
+            .expect("the configured endpoint always resolves a base URL")
     }
 }
 
@@ -449,7 +459,8 @@ fn build_fallback_chain(
             fallback_key.as_deref().unwrap_or_default(),
             fallback_model,
             &endpoint.http,
-        );
+        )
+        .expect("a fallback route always resolves a base URL");
         chain.push(provider);
     }
     if chain.len() > 1 {
@@ -482,13 +493,16 @@ fn build_aux_model(config: &Config, endpoint: &Endpoint) -> Option<Arc<dyn Model
         );
         return None;
     }
-    Some(build_transport(
-        aux_kind,
-        aux_base_url,
-        aux_key.as_deref().unwrap_or_default(),
-        aux_model_name,
-        &endpoint.http,
-    ))
+    Some(
+        build_transport(
+            aux_kind,
+            aux_base_url,
+            aux_key.as_deref().unwrap_or_default(),
+            aux_model_name,
+            &endpoint.http,
+        )
+        .expect("the auxiliary route always resolves a base URL"),
+    )
 }
 
 /// Connect MCP servers and assemble the tool registry the agent shares.
@@ -503,6 +517,7 @@ async fn build_tools(config: &Config) -> (Arc<McpManager>, Arc<ToolRegistry>) {
     if registered > 0 {
         tracing::info!(tools = registered, "registered MCP tools");
     }
+    silver_core::tools::team::register(&mut registry);
     // Delegation needs a subagent runner, registered here only when the operator left it on.
     if config.delegation.enabled {
         silver_core::tools::delegate::register(&mut registry, config.delegation.max_concurrent);
@@ -706,6 +721,7 @@ fn build_services(
         memory: Some(memory),
         session_search: Some(search),
         documents: Some(documents),
+        team: None,
     }
 }
 

@@ -4,13 +4,13 @@
 
 use std::collections::HashMap;
 use std::process::Stdio;
-use std::sync::{Arc, PoisonError};
+use std::sync::{Arc, OnceLock, PoisonError};
 
 use async_trait::async_trait;
 use serde_json::{json, Value};
 use silver_core::error::{CoreError, CoreResult};
 use silver_core::model::{FinishReason, Model, ModelRequest, ModelStream, ModelStreamEvent};
-use silver_protocol::{ContentPart, MessageRole};
+use silver_protocol::{ApprovalDecision, ContentPart, MessageRole};
 use tokio::io::{AsyncBufReadExt, AsyncWrite, AsyncWriteExt, BufReader};
 use tokio::sync::{mpsc, oneshot, Mutex};
 use tokio_util::sync::CancellationToken;
@@ -23,6 +23,30 @@ const DEFAULT_COMMAND: &str = "copilot";
 
 /// Default arguments that put the CLI in ACP stdio mode.
 const DEFAULT_ARGS: [&str; 2] = ["--acp", "--stdio"];
+
+/// An agent asking leave to act. `session` is the key of the silver session it works for.
+#[derive(Clone, Debug)]
+pub struct PermissionRequest {
+    pub session: String,
+    pub title: String,
+    /// The agent's own kind of action: `execute`, `edit`, `read`, `fetch`, ...
+    pub kind: String,
+    /// What the call would do, as the agent describes it: a command, or a path and new text.
+    pub input: Value,
+}
+
+/// Whoever can put a permission request to the user. Without one every request is refused.
+#[async_trait]
+pub trait PermissionBroker: Send + Sync {
+    async fn decide(&self, request: PermissionRequest) -> ApprovalDecision;
+}
+
+static BROKER: OnceLock<Arc<dyn PermissionBroker>> = OnceLock::new();
+
+/// Name who answers agents' permission requests, before any agent starts. The first call wins.
+pub fn set_broker(broker: Arc<dyn PermissionBroker>) {
+    drop(BROKER.set(broker));
+}
 
 /// One streamed update from the agent.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -89,13 +113,18 @@ type PendingCalls = std::sync::Mutex<HashMap<u64, oneshot::Sender<Result<Value, 
 struct Connection {
     writer: Mutex<Box<dyn AsyncWrite + Send + Unpin>>,
     pending: PendingCalls,
-    updates: std::sync::Mutex<Option<mpsc::UnboundedSender<AcpUpdate>>>,
+    /// Where each session's updates go. Turns for several sessions run through one process at
+    /// once, so an update is delivered by the session it names.
+    updates: std::sync::Mutex<HashMap<String, mpsc::UnboundedSender<AcpUpdate>>>,
+    /// The silver session key each routed ACP session works for.
+    keys: std::sync::Mutex<HashMap<String, String>>,
+    broker: Option<Arc<dyn PermissionBroker>>,
     next_id: std::sync::atomic::AtomicU64,
 }
 
 impl Connection {
     /// Wire a reader and writer into a connection, spawning the read loop.
-    fn new<R, W>(reader: R, writer: W) -> Arc<Self>
+    fn new<R, W>(reader: R, writer: W, broker: Option<Arc<dyn PermissionBroker>>) -> Arc<Self>
     where
         R: tokio::io::AsyncRead + Send + Unpin + 'static,
         W: AsyncWrite + Send + Unpin + 'static,
@@ -103,7 +132,9 @@ impl Connection {
         let connection = Arc::new(Self {
             writer: Mutex::new(Box::new(writer)),
             pending: std::sync::Mutex::new(HashMap::new()),
-            updates: std::sync::Mutex::new(None),
+            updates: std::sync::Mutex::new(HashMap::new()),
+            keys: std::sync::Mutex::new(HashMap::new()),
+            broker,
             next_id: std::sync::atomic::AtomicU64::new(1),
         });
         let conn = Arc::clone(&connection);
@@ -117,17 +148,19 @@ impl Connection {
                 let Ok(value) = serde_json::from_str::<Value>(line) else {
                     continue;
                 };
-                // A frame carrying a method is something the agent is telling us or asking us. A
-                // request — method and id together — has to be answered, or the agent waits
-                // forever for a client that never replies.
-                if let Some(method) = value.get("method").and_then(Value::as_str) {
+                // A request (method and id) must be answered or the agent waits forever. It is
+                // answered on its own task: a permission request can wait for the user while
+                // other sessions go on.
+                if value.get("method").is_some() {
                     if value.get("id").is_some() {
-                        if let Some(update) = conn.answer(&value).await {
-                            conn.emit(update);
-                        }
-                    } else if method == "session/update" {
+                        tokio::spawn(Arc::clone(&conn).answer(value));
+                    } else if value["method"] == "session/update" {
+                        let session = value
+                            .pointer("/params/sessionId")
+                            .and_then(Value::as_str)
+                            .unwrap_or_default();
                         if let Some(update) = value.get("params").and_then(map_session_update) {
-                            conn.emit(update);
+                            conn.emit(session, update);
                         }
                     }
                     continue;
@@ -158,13 +191,13 @@ impl Connection {
         connection
     }
 
-    /// Hand one update to the stream currently routed to this connection, if any.
-    fn emit(&self, update: AcpUpdate) {
+    /// Hand one update to the stream of the session it names, if any.
+    fn emit(&self, session: &str, update: AcpUpdate) {
         let sender = self
             .updates
             .lock()
             .ok()
-            .and_then(|slot| slot.as_ref().cloned());
+            .and_then(|routes| routes.get(session).cloned());
         if let Some(sender) = sender {
             drop(sender.send(update));
         }
@@ -181,12 +214,15 @@ impl Connection {
         drop(writer.flush().await);
     }
 
-    /// Answer a request the agent addressed to us. `session/request_permission` must be answered or
-    /// the turn hangs; silver refuses it, since the agent stays in the directory it started in,
-    /// and reports the refusal as reasoning.
-    async fn answer(&self, request: &Value) -> Option<AcpUpdate> {
-        let id = request.get("id")?;
-        let method = request.get("method")?.as_str()?;
+    /// Answer a request the agent addressed to us. `session/request_permission` goes to the
+    /// broker, who may put it to the user; it is refused when there is none, or it says no, and
+    /// the refusal is reported as reasoning. Anything else is not supported.
+    async fn answer(self: Arc<Self>, request: Value) {
+        let Some(id) = request.get("id") else { return };
+        let method = request
+            .get("method")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
         if method != "session/request_permission" {
             self.send(json!({
                 "jsonrpc": "2.0",
@@ -197,36 +233,78 @@ impl Connection {
                 },
             }))
             .await;
-            return None;
+            return;
         }
         let params = request.get("params");
-        let title = params
-            .and_then(|params| params.get("toolCall"))
-            .and_then(|tool| tool.get("title"))
+        let text = |value: Option<&Value>| {
+            value
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string()
+        };
+        let call = params.and_then(|params| params.get("toolCall"));
+        let session = text(params.and_then(|params| params.get("sessionId")));
+        let title = call
+            .and_then(|call| call.get("title"))
             .and_then(Value::as_str)
             .unwrap_or("an action outside its working directory");
-        // Prefer the agent's own reject option; without one, `cancelled` is the protocol's way of
-        // refusing that names no option.
-        let outcome = params
-            .and_then(|params| params.get("options"))
-            .and_then(Value::as_array)
-            .and_then(|options| {
-                options
-                    .iter()
-                    .find(|option| {
-                        matches!(
-                            option.get("kind").and_then(Value::as_str),
-                            Some("reject_once") | Some("reject_always")
-                        )
+        let key = self
+            .keys
+            .lock()
+            .ok()
+            .and_then(|keys| keys.get(&session).cloned());
+        let decision = match (&self.broker, key) {
+            (Some(broker), Some(session)) => {
+                broker
+                    .decide(PermissionRequest {
+                        session,
+                        title: title.to_string(),
+                        kind: text(call.and_then(|call| call.get("kind"))),
+                        input: call
+                            .and_then(|call| call.get("rawInput"))
+                            .cloned()
+                            .unwrap_or(Value::Null),
                     })
-                    .and_then(|option| option.get("optionId"))
-                    .and_then(Value::as_str)
-            })
-            .map(|option| json!({ "outcome": { "outcome": "selected", "optionId": option } }))
-            .unwrap_or_else(|| json!({ "outcome": { "outcome": "cancelled" } }));
+                    .await
+            }
+            _ => ApprovalDecision::Deny,
+        };
+        // The agent's own option of the kind wanted; when it has none, `cancelled` is the
+        // protocol's way of refusing that names no option.
+        let wanted = match decision {
+            ApprovalDecision::Approve => ["allow_once", "allow_always"],
+            ApprovalDecision::ApproveSession | ApprovalDecision::ApproveAlways => {
+                ["allow_always", "allow_once"]
+            }
+            ApprovalDecision::Deny => ["reject_once", "reject_always"],
+        };
+        let options = params
+            .and_then(|params| params.get("options"))
+            .and_then(Value::as_array);
+        let chosen = wanted.iter().find_map(|kind| {
+            options?
+                .iter()
+                .find(|option| option["kind"] == *kind)
+                .and_then(|option| option["optionId"].as_str())
+        });
+        let outcome = match chosen {
+            Some(option) => json!({ "outcome": { "outcome": "selected", "optionId": option } }),
+            None => json!({ "outcome": { "outcome": "cancelled" } }),
+        };
         self.send(json!({ "jsonrpc": "2.0", "id": id, "result": outcome }))
             .await;
-        Some(AcpUpdate::ToolActivity(format!("[refused] {title}")))
+        if decision == ApprovalDecision::Deny {
+            self.emit(
+                &session,
+                AcpUpdate::ToolActivity(format!("[refused] {title}")),
+            );
+        }
+    }
+
+    /// Tell the agent something that needs no answer.
+    async fn notify(&self, method: &str, params: Value) {
+        self.send(json!({ "jsonrpc": "2.0", "method": method, "params": params }))
+            .await;
     }
 
     /// Send a request and wait for its response.
@@ -260,10 +338,24 @@ impl Connection {
             .map_err(|_closed| "the ACP agent closed the connection".to_string())?
     }
 
-    /// Route updates to this channel until it is replaced.
-    fn route_updates(&self, sender: mpsc::UnboundedSender<AcpUpdate>) {
-        if let Ok(mut slot) = self.updates.lock() {
-            *slot = Some(sender);
+    /// Send a session's updates to this channel until `release_updates`; `key` names the silver
+    /// session it works for, which a permission request is put to the user as.
+    fn route_updates(&self, session: &str, key: &str, sender: mpsc::UnboundedSender<AcpUpdate>) {
+        if let Ok(mut routes) = self.updates.lock() {
+            routes.insert(session.to_string(), sender);
+        }
+        if let Ok(mut keys) = self.keys.lock() {
+            keys.insert(session.to_string(), key.to_string());
+        }
+    }
+
+    /// Stop routing a session's updates, which closes its channel once what is queued is read.
+    fn release_updates(&self, session: &str) {
+        if let Ok(mut routes) = self.updates.lock() {
+            routes.remove(session);
+        }
+        if let Ok(mut keys) = self.keys.lock() {
+            keys.remove(session);
         }
     }
 }
@@ -352,7 +444,7 @@ impl AcpProvider {
             .stdout
             .take()
             .ok_or_else(|| CoreError::Internal("ACP agent has no stdout".to_string()))?;
-        let connection = Connection::new(stdout, stdin);
+        let connection = Connection::new(stdout, stdin, BROKER.get().cloned());
         connection
             .request(
                 "initialize",
@@ -380,11 +472,15 @@ impl AcpProvider {
         &self,
         connection: &Arc<Connection>,
         key: &str,
+        workspace: Option<&std::path::Path>,
     ) -> Result<(String, bool), CoreError> {
         if let Some(session) = self.sessions.lock().await.get(key) {
             return Ok((String::clone(session), false));
         }
-        let cwd = Option::clone(&self.cwd)
+        // The agent works where the run does: a session never changes workspace.
+        let cwd = workspace
+            .map(|path| path.display().to_string())
+            .or_else(|| Option::clone(&self.cwd))
             .or_else(|| {
                 std::env::current_dir()
                     .ok()
@@ -487,13 +583,23 @@ impl Model for AcpProvider {
             .cache_key
             .take()
             .unwrap_or_else(|| uuid::Uuid::now_v7().to_string());
-        let (session_id, fresh) = self.session(&connection, &key).await?;
+        let (session_id, fresh) = self
+            .session(&connection, &key, request.workspace.as_deref())
+            .await?;
         let text = prompt_text(&request, fresh);
 
-        let (sender, receiver) = mpsc::unbounded_channel();
-        connection.route_updates(sender);
+        let (sender, updates) = mpsc::unbounded_channel();
+        connection.route_updates(&session_id, &key, sender);
 
         let (done_tx, done_rx) = mpsc::unbounded_channel();
+        let turn = Turn {
+            updates,
+            answer: Some(done_rx),
+            cancel,
+            connection: Arc::clone(&connection),
+            session: session_id.clone(),
+            finished: false,
+        };
         tokio::spawn(async move {
             let outcome = connection
                 .request(
@@ -504,53 +610,193 @@ impl Model for AcpProvider {
                     }),
                 )
                 .await;
+            // The agent sends a turn's updates before its answer, so they are all queued by now.
+            connection.release_updates(&session_id);
             drop(done_tx.send(outcome));
         });
 
-        let stream = futures::stream::unfold(
-            (receiver, done_rx, cancel, false),
-            |(mut receiver, mut done_rx, cancel, finished)| async move {
-                if finished {
-                    return None;
-                }
-                tokio::select! {
-                    _ = cancel.cancelled() => Some((
-                        Err(CoreError::ProviderUnavailable(
-                            "provider stream cancelled".to_string(),
-                        )),
-                        (receiver, done_rx, CancellationToken::new(), true),
-                    )),
-                    update = receiver.recv() => match update {
-                        Some(AcpUpdate::Message(text)) => Some((
-                            Ok(ModelStreamEvent::TextDelta(text)),
-                            (receiver, done_rx, cancel, false),
-                        )),
-                        Some(AcpUpdate::Thought(text)) | Some(AcpUpdate::ToolActivity(text)) => {
-                            Some((
-                                Ok(ModelStreamEvent::ReasoningDelta(text)),
-                                (receiver, done_rx, cancel, false),
-                            ))
-                        }
-                        Some(AcpUpdate::Finished(_)) | None => Some((
-                            Ok(ModelStreamEvent::Finish(FinishReason::Stop)),
-                            (receiver, done_rx, cancel, true),
-                        )),
-                    },
-                    outcome = done_rx.recv() => match outcome {
-                        Some(Ok(_)) | None => Some((
-                            Ok(ModelStreamEvent::Finish(FinishReason::Stop)),
-                            (receiver, done_rx, cancel, true),
-                        )),
-                        Some(Err(error)) => Some((
-                            Err(CoreError::ProviderUnavailable(format!(
-                                "ACP prompt failed: {error}"
-                            ))),
-                            (receiver, done_rx, cancel, true),
-                        )),
-                    },
-                }
-            },
-        );
+        let stream = futures::stream::unfold(turn, |mut turn| async move {
+            let event = turn.next().await?;
+            Some((event, turn))
+        });
         Ok(Box::pin(stream))
+    }
+}
+
+/// One prompt in flight: what the agent says, until it has answered and the queue runs dry.
+struct Turn {
+    updates: mpsc::UnboundedReceiver<AcpUpdate>,
+    /// The agent's answer to the prompt, until it comes.
+    answer: Option<mpsc::UnboundedReceiver<Result<Value, String>>>,
+    cancel: CancellationToken,
+    connection: Arc<Connection>,
+    session: String,
+    finished: bool,
+}
+
+impl Turn {
+    /// The next event of the turn, or none once it is over. The turn ends when the queue runs dry
+    /// after the agent answered, not when the answer arrives, so text sent just before it is never
+    /// lost; only a failed prompt, or a cancel, ends it early.
+    async fn next(&mut self) -> Option<CoreResult<ModelStreamEvent>> {
+        if self.finished {
+            return None;
+        }
+        loop {
+            let answered = async {
+                match self.answer.as_mut() {
+                    Some(answer) => answer.recv().await,
+                    None => std::future::pending().await,
+                }
+            };
+            tokio::select! {
+                () = self.cancel.cancelled() => {
+                    self.finished = true;
+                    // Tell the agent too, or it carries on with a turn nobody wants.
+                    self.connection
+                        .notify("session/cancel", json!({ "sessionId": self.session }))
+                        .await;
+                    return Some(Err(CoreError::ProviderUnavailable(
+                        "provider stream cancelled".to_string(),
+                    )));
+                }
+                update = self.updates.recv() => {
+                    let event = match update {
+                        Some(AcpUpdate::Message(text)) => ModelStreamEvent::TextDelta(text),
+                        Some(AcpUpdate::Thought(text) | AcpUpdate::ToolActivity(text)) => {
+                            ModelStreamEvent::ReasoningDelta(text)
+                        }
+                        Some(AcpUpdate::Finished(_)) | None => {
+                            self.finished = true;
+                            ModelStreamEvent::Finish(FinishReason::Stop)
+                        }
+                    };
+                    return Some(Ok(event));
+                }
+                outcome = answered => match outcome {
+                    Some(Err(error)) => {
+                        self.finished = true;
+                        return Some(Err(CoreError::ProviderUnavailable(format!(
+                            "ACP prompt failed: {error}"
+                        ))));
+                    }
+                    Some(Ok(_)) | None => self.answer = None,
+                },
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::io::AsyncWriteExt;
+
+    fn update(session: &str, text: &str) -> String {
+        format!(
+            "{}\n",
+            json!({
+                "jsonrpc": "2.0",
+                "method": "session/update",
+                "params": {
+                    "sessionId": session,
+                    "update": {
+                        "sessionUpdate": "agent_message_chunk",
+                        "content": { "type": "text", "text": text },
+                    },
+                },
+            })
+        )
+    }
+
+    struct Answer(ApprovalDecision);
+
+    #[async_trait]
+    impl PermissionBroker for Answer {
+        async fn decide(&self, request: PermissionRequest) -> ApprovalDecision {
+            assert_eq!(
+                (request.session.as_str(), request.kind.as_str()),
+                ("key-a", "edit")
+            );
+            assert_eq!(request.title, "Write x");
+            self.0
+        }
+    }
+
+    /// What a client says to an agent's permission request, with `broker` to ask.
+    async fn permission_reply(broker: Option<Answer>) -> Value {
+        let (mut agent_out, client_in) = tokio::io::duplex(4096);
+        let (client_out, agent_in) = tokio::io::duplex(4096);
+        let broker = broker.map(|answer| Arc::new(answer) as Arc<dyn PermissionBroker>);
+        let connection = Connection::new(client_in, client_out, broker);
+        let (sender, _updates) = mpsc::unbounded_channel();
+        connection.route_updates("a", "key-a", sender);
+        let request = json!({
+            "jsonrpc": "2.0", "id": 7, "method": "session/request_permission",
+            "params": {
+                "sessionId": "a",
+                "toolCall": { "title": "Write x", "kind": "edit", "rawInput": { "file_path": "x" } },
+                "options": [
+                    { "optionId": "yes", "name": "Allow", "kind": "allow_once" },
+                    { "optionId": "always", "name": "Always", "kind": "allow_always" },
+                    { "optionId": "no", "name": "Reject", "kind": "reject_once" },
+                ],
+            },
+        });
+        agent_out
+            .write_all(format!("{request}\n").as_bytes())
+            .await
+            .unwrap();
+        let line = BufReader::new(agent_in)
+            .lines()
+            .next_line()
+            .await
+            .unwrap()
+            .unwrap();
+        serde_json::from_str(&line).unwrap()
+    }
+
+    #[tokio::test]
+    async fn a_permission_request_is_the_brokers_to_answer() {
+        let picked = |broker| async move {
+            permission_reply(broker).await["result"]["outcome"]["optionId"].clone()
+        };
+        assert_eq!(picked(Some(Answer(ApprovalDecision::Approve))).await, "yes");
+        assert_eq!(
+            picked(Some(Answer(ApprovalDecision::ApproveAlways))).await,
+            "always"
+        );
+        assert_eq!(picked(Some(Answer(ApprovalDecision::Deny))).await, "no");
+        // With nobody to ask the agent is refused, and told which request it was.
+        assert_eq!(picked(None).await, "no");
+        assert_eq!(permission_reply(None).await["id"], 7);
+    }
+
+    #[tokio::test]
+    async fn updates_reach_only_the_session_they_name() {
+        let (mut agent, client) = tokio::io::duplex(4096);
+        let connection = Connection::new(client, tokio::io::sink(), None);
+        let (first, mut first_updates) = mpsc::unbounded_channel();
+        let (second, mut second_updates) = mpsc::unbounded_channel();
+        connection.route_updates("a", "key-a", first);
+        connection.route_updates("b", "key-b", second);
+
+        for frame in [
+            update("b", "for b"),
+            update("a", "for a"),
+            update("c", "for nobody"),
+        ] {
+            agent.write_all(frame.as_bytes()).await.unwrap();
+        }
+        let text = |update| match update {
+            Some(AcpUpdate::Message(text)) => text,
+            _ => panic!("expected a message"),
+        };
+        assert_eq!(text(first_updates.recv().await), "for a");
+        assert_eq!(text(second_updates.recv().await), "for b");
+
+        // Releasing a session closes its channel once what was queued is read.
+        connection.release_updates("a");
+        assert!(first_updates.recv().await.is_none());
     }
 }
