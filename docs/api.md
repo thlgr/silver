@@ -84,8 +84,8 @@ and key. One run per session at a time: a second returns `session_busy`.
 | GET | `/v1/checkpoints?session_id=…&limit=…` | File snapshots taken before edits |
 | POST | `/v1/checkpoints/{id}/restore` | Restore one into its workspace |
 | GET | `/v1/diff?workspace_id=…&scope=working\|staged\|all\|session&stat=&path=` | The workspace's git diff |
-| GET, POST | `/v1/chat/bots` | The [Messages](messages.md) roster `{bots}`, or create `{kind?, name, description?, instructions?, avatar_shape?, avatar_color?, provider?, model?, workspace_id?, yolo?, members?}`; 201. `kind: "group"` needs `members`, and the same members return the group they already share |
-| PATCH, DELETE | `/v1/chat/bots/{id}` | Change any of those fields and `pinned` (a blank `provider`, `model` or `workspace_id` clears it; a new folder starts a new session), or delete a bot with its chat and sessions; 204 |
+| GET, POST | `/v1/chat/bots` | The [Messages](messages.md) roster `{bots}`, or create `{kind?, name, description?, instructions?, avatar_shape?, avatar_color?, provider?, model?, reasoning_effort?, workspace_id?, yolo?, members?}`; 201. `kind: "group"` needs `members`, and the same members return the group they already share |
+| PATCH, DELETE | `/v1/chat/bots/{id}` | Change any of those fields and `pinned` (a blank `provider`, `model`, `workspace_id` or `reasoning_effort` clears it; a new folder starts a new session), or delete a bot with its chat and sessions; 204 |
 | GET | `/v1/chat/bots/{id}/entries?thread=&before=&limit=` | The newest page of a chat, or of the thread on entry `thread`, oldest first; roots carry their thread `summary`. `before` is a `seq` |
 | POST | `/v1/chat/bots/{id}/send` | `{text, thread_id?, nonce?}`: store the message and start whoever answers it; 201. A repeated `nonce` returns the first message |
 | POST | `/v1/chat/bots/{id}/stop` | Stop a bot or group and drop what is queued; 204 |

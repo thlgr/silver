@@ -137,6 +137,21 @@ fn non_blank(value: Option<String>) -> Option<String> {
         .filter(|value| !value.is_empty())
 }
 
+/// A reasoning effort the caller named, or None for the daemon default; a level the daemon
+/// does not accept is a bad request.
+fn effort(value: Option<String>) -> CoreResult<Option<String>> {
+    let value = non_blank(value);
+    if let Some(level) = &value {
+        if !crate::config::is_valid_reasoning_effort(level) {
+            return Err(invalid(format!(
+                "reasoning_effort {level:?} must be one of {}",
+                crate::config::REASONING_EFFORTS.join(", ")
+            )));
+        }
+    }
+    Ok(value)
+}
+
 impl ChatHub {
     pub fn new(db: Db) -> Arc<Self> {
         let (events, _) = broadcast::channel(1024);
@@ -264,6 +279,7 @@ impl ChatHub {
             instructions: request.instructions.trim().to_string(),
             provider: non_blank(request.provider),
             model: non_blank(request.model),
+            reasoning_effort: effort(request.reasoning_effort)?,
             workspace_id: request.workspace_id,
             yolo: request.yolo,
             members,
@@ -316,6 +332,9 @@ impl ChatHub {
             }
             if request.model.is_some() {
                 row.model = non_blank(request.model);
+            }
+            if request.reasoning_effort.is_some() {
+                row.reasoning_effort = effort(request.reasoning_effort)?;
             }
             if let Some(yolo) = request.yolo {
                 row.yolo = yolo;
@@ -729,6 +748,7 @@ fn view(
         avatar_color: row.avatar_color,
         provider: row.provider,
         model: row.model,
+        reasoning_effort: row.reasoning_effort,
         workspace_id: row.workspace_id,
         yolo: row.yolo,
         members: row.members,
@@ -824,5 +844,47 @@ mod tests {
         );
         let second = groups.into_iter().find(|bot| bot.id == second.id).unwrap();
         assert_eq!(second.members, [cara.id, bob.id]);
+    }
+
+    #[tokio::test]
+    async fn a_bots_effort_is_stored_validated_and_cleared() {
+        let dir = std::env::temp_dir().join(format!("silver-chat-mod-{}", uuid::Uuid::now_v7()));
+        let db = crate::db::Db::open(&dir.join("state.db")).await.unwrap();
+        db.migrate().await.unwrap();
+        let hub = ChatHub::new(db);
+
+        let bot = hub
+            .create_bot(CreateBotRequest {
+                name: "Effort".into(),
+                reasoning_effort: Some("high".into()),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(bot.reasoning_effort.as_deref(), Some("high"));
+
+        // A level the daemon does not accept is a bad request.
+        let error = hub
+            .create_bot(CreateBotRequest {
+                name: "Too much".into(),
+                reasoning_effort: Some("ultra".into()),
+                ..Default::default()
+            })
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("must be one of"), "{error}");
+
+        // A blank clears it, back to the daemon default.
+        let cleared = hub
+            .update_bot(
+                &bot.id,
+                UpdateBotRequest {
+                    reasoning_effort: Some(String::new()),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(cleared.reasoning_effort, None);
     }
 }

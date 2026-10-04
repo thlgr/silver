@@ -22,9 +22,10 @@ use tokio_rusqlite::rusqlite::{self, params, OptionalExtension};
 
 /// The migrations, embedded so a release binary carries its own. Entry `n` takes a database
 /// from `user_version` `n` to `n + 1`.
-const MIGRATIONS: [&str; 2] = [
+const MIGRATIONS: [&str; 3] = [
     include_str!("../../../migrations/0001_initial.sql"),
     include_str!("../../../migrations/0002_chat.sql"),
+    include_str!("../../../migrations/0003_bot_reasoning_effort.sql"),
 ];
 
 /// How long SQLite waits for a competing writer before returning SQLITE_BUSY.

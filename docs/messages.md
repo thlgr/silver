@@ -17,6 +17,7 @@ A bot is a persistent, named teammate with its own chat:
 | name, about | What the roster shows; the about text is what the bot, and the other bots, know it for |
 | avatar | One of 8 shapes in one of 11 colours, drawn as a halftone grid with hollow eyes that glance and blink while the bot works |
 | agent, model | Which [provider](provider-setup.md) answers, and which model. Empty follows the daemon's default. Any provider works, including the [external agent modes](provider-setup.md#external-agent-modes-acp) |
+| effort | The reasoning effort the bot's turns run at (`none`…`high`), like the workbench's effort menu. Empty follows the daemon default |
 | workspace | One of the workbench's [workspaces](tools.md), or **Add workspace…** to register a folder (typed by path when silver cannot open the machine's folder dialog). Without one a bot can chat, remember and ask other bots, but it has no file or shell tools |
 | permissions | *Ask me* (silver's normal approvals) or *Approve automatically* |
 | instructions | Standing instructions, given to the bot on every turn |

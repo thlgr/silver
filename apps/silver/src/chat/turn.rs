@@ -461,6 +461,14 @@ impl ChatHub {
         {
             return self.fail(spec, CoreError::from(error)).await;
         }
+        // The effort is the session's too, set (or cleared) every turn so an edit takes effect.
+        if let Err(error) = self
+            .db
+            .set_session_reasoning_effort(spec.session.id, bot.reasoning_effort.clone())
+            .await
+        {
+            return self.fail(spec, CoreError::from(error)).await;
+        }
         let created = runs
             .create_run(CreateRunRequest {
                 workspace_id: bot.workspace_id,
