@@ -66,20 +66,16 @@ impl ApprovalRegistry {
         }
     }
 
-    /// Resolve a pending approval by id alone, returning the run it belonged to. The AG-UI
-    /// resume path answers interrupts by their approval id, not by run.
-    pub fn resolve(&self, id: ApprovalId, outcome: ApprovalOutcome) -> Option<RunId> {
-        let mut map = self.pending.lock().expect("approval lock");
-        let pending = map.remove(&id)?;
-        drop(pending.sender.send(outcome));
-        Some(pending.run_id)
-    }
-
-    /// The approval a run is waiting on, if any.
-    pub fn pending_run(&self, run_id: RunId) -> Option<ApprovalId> {
-        let map = self.pending.lock().expect("approval lock");
-        map.iter()
-            .find_map(|(id, pending)| (pending.run_id == run_id).then_some(*id))
+    /// The approvals a run is waiting on, in any order. Parallel subagents share the parent's
+    /// gate, so a run can have several pending at once.
+    pub fn pending(&self, run_id: RunId) -> Vec<ApprovalId> {
+        self.pending
+            .lock()
+            .expect("approval lock")
+            .iter()
+            .filter(|(_, pending)| pending.run_id == run_id)
+            .map(|(id, _)| *id)
+            .collect()
     }
 
     pub fn cancel_run(&self, run_id: RunId) {
@@ -1028,14 +1024,16 @@ impl RunManager {
         }
     }
 
-    /// Validate a session or create one bound to the requested scope (INV-3, INV-5).
-    async fn resolve_session(
+    /// Validate a session or create one bound to the requested scope (INV-3, INV-5). The second
+    /// value is true when this call created the session, so a caller can seed its first
+    /// conversation exactly once.
+    pub(crate) async fn resolve_session(
         &self,
         session_id: Option<SessionId>,
         workspace_id: Option<WorkspaceId>,
         source: String,
         external_key: Option<String>,
-    ) -> CoreResult<Session> {
+    ) -> CoreResult<(Session, bool)> {
         if let Some(session_id) = session_id {
             let session = self
                 .db
@@ -1045,7 +1043,7 @@ impl RunManager {
             if session.workspace_id != workspace_id {
                 return Err(CoreError::SessionWorkspaceMismatch);
             }
-            return Ok(session);
+            return Ok((session, false));
         }
 
         if let Some(external_key) = &external_key {
@@ -1054,7 +1052,7 @@ impl RunManager {
                 .find_session_by_external_key(&source, external_key, workspace_id)
                 .await?
             {
-                return Ok(existing);
+                return Ok((existing, false));
             }
         }
 
@@ -1068,7 +1066,7 @@ impl RunManager {
             created_at: now,
             updated_at: now,
         };
-        Ok(self.db.create_session(session).await?)
+        Ok((self.db.create_session(session).await?, true))
     }
 
     async fn resolve_workspace(&self, id: Option<WorkspaceId>) -> CoreResult<Option<Workspace>> {
@@ -1235,7 +1233,7 @@ impl RunManager {
             .as_deref()
             .map(str::trim)
             .is_some_and(|effort| !effort.is_empty());
-        let session = self
+        let (session, _created) = self
             .resolve_session(
                 req.session_id,
                 req.workspace_id,
@@ -1728,15 +1726,10 @@ impl RunManager {
         }
     }
 
-    /// Resolve a pending approval raised by any run, returning the run whose turn it unblocks.
-    /// The AG-UI resume path answers interrupts by their approval id rather than by run.
-    pub fn resolve_approval(&self, id: ApprovalId, outcome: ApprovalOutcome) -> Option<RunId> {
-        self.registry.resolve(id, outcome)
-    }
-
-    /// The approval a run is waiting on, if any.
-    pub fn pending_approval(&self, run_id: RunId) -> Option<ApprovalId> {
-        self.registry.pending_run(run_id)
+    /// The approvals a run is waiting on, in any order. The AG-UI resume path answers every
+    /// one of them, since parallel subagents share the parent's gate.
+    pub fn pending_approvals(&self, run_id: RunId) -> Vec<ApprovalId> {
+        self.registry.pending(run_id)
     }
 
     pub async fn subscribe(

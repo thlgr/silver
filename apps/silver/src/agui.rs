@@ -6,8 +6,8 @@ use chrono::Utc;
 use serde::Deserialize;
 use silver_core::session::Message;
 use silver_protocol::{
-    ApprovalId, ContentPart, EventPayload, MessageId, MessageRole, RunEvent, TokenUsage,
-    ToolCallId, ToolStatus,
+    ApprovalDecision, ApprovalId, ContentPart, EventPayload, MessageId, MessageRole, RunEvent,
+    TokenUsage, ToolCallId, ToolStatus,
 };
 
 /// The protocol version this server speaks.
@@ -16,39 +16,24 @@ pub const PROTOCOL_VERSION: &str = "1.0";
 /// The session source of every conversation started through the AG-UI endpoint.
 pub const SESSION_SOURCE: &str = "agui";
 
-/// One run request, POSTed to `/agent`. The fields of the input this server does not use
-/// (`tools`, `context`, `state`, `forwardedProps`, `resume`) are accepted and ignored: the
-/// conversation arrives in `messages`.
+/// One run request, POSTed to `/agent`. Unknown members are ignored by serde, per the
+/// protocol's processing model.
 #[derive(Debug, Deserialize)]
 pub struct RunAgentInput {
     #[serde(rename = "threadId")]
     pub thread_id: String,
     #[serde(rename = "runId")]
     pub run_id: String,
-    #[serde(rename = "protocolVersion", default)]
-    pub protocol_version: Option<String>,
     pub messages: Vec<AguiMessage>,
-    /// The application's own frontend tools, executed by the app rather than silver. Accepted
-    /// but never offered to the model, so nothing ever calls one.
-    #[serde(default)]
-    pub tools: Vec<serde_json::Value>,
     /// Ambient information for the run, injected into the run's grounding.
     #[serde(default)]
     pub context: Vec<AguiContext>,
     /// Application-specific values passed through; injected into the grounding like context.
     #[serde(rename = "forwardedProps", default)]
     pub forwarded_props: Option<serde_json::Value>,
-    /// The consumer's shared state. Accepted; silver keeps no shared state, so nothing is
-    /// merged and no state events are emitted.
-    #[serde(default)]
-    pub state: Option<serde_json::Value>,
     /// Answers to the interrupts an earlier run on this thread raised (approvals).
     #[serde(default)]
     pub resume: Vec<ResumeEntry>,
-    /// Members this version of the protocol does not define, stripped with a warning per the
-    /// processing model.
-    #[serde(flatten)]
-    pub _unknown: serde_json::Map<String, serde_json::Value>,
 }
 
 /// One named piece of ambient information the application wants the agent to see.
@@ -76,6 +61,22 @@ pub enum ResumeStatus {
     Cancelled,
 }
 
+/// The decision and optional answer a resume entry carries: `resolved` approves, `cancelled`
+/// denies, and a string `payload` answers an `ask_user_question` call.
+pub fn resume_decision(entry: &ResumeEntry) -> (ApprovalDecision, Option<String>) {
+    match entry.status {
+        ResumeStatus::Resolved => (
+            ApprovalDecision::Approve,
+            entry
+                .payload
+                .as_ref()
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_string),
+        ),
+        ResumeStatus::Cancelled => (ApprovalDecision::Deny, None),
+    }
+}
+
 /// Render the run's ambient `context` entries and `forwardedProps` into the text block injected
 /// into the prompt. None when the client sent neither.
 pub fn render_external_context(
@@ -95,17 +96,14 @@ pub fn render_external_context(
         if !body.is_empty() {
             body.push('\n');
         }
-        body.push_str(&format!(
-            "forwardedProps (opaque to the protocol): {}",
-            serde_json::to_string(value).unwrap_or_else(|_| "{}".to_string())
-        ));
+        body.push_str(&format!("forwardedProps (opaque to the protocol): {value}"));
     }
     (!body.is_empty()).then_some(body)
 }
 
 /// A conversation message, discriminated by `role`. Only the roles that resume a conversation
-/// are modeled; `activity` and `reasoning` messages are the consumer's rendering material and
-/// are skipped on input.
+/// are modeled; `activity` messages are the consumer's rendering material and are skipped, and
+/// `reasoning` messages are carried onto the assistant message that follows them.
 #[derive(Debug, Deserialize)]
 #[serde(tag = "role", rename_all = "lowercase")]
 pub enum AguiMessage {
@@ -173,16 +171,8 @@ pub enum AguiSource {
         #[serde(rename = "mimeType")]
         mime_type: String,
     },
-    Url {
-        value: String,
-        #[serde(rename = "mimeType", default)]
-        mime_type: Option<String>,
-    },
-    File {
-        value: String,
-        #[serde(default)]
-        provider: Option<String>,
-    },
+    #[serde(other)]
+    Other,
 }
 
 /// A tool call an assistant message made.
@@ -412,7 +402,7 @@ impl Translator {
                     "type": "TOOL_CALL_RESULT",
                     "messageId": new_message_id(),
                     "toolCallId": tool_call_id,
-                    "content": tool_result_text(status, summary),
+                    "content": tool_result_text(*status, summary),
                 })]
             }
             EventPayload::ApprovalRequired {
@@ -420,7 +410,7 @@ impl Translator {
                 tool_call_id,
                 description,
                 ..
-            } => self.interrupt_approval(approval_id, tool_call_id, description),
+            } => self.interrupt_approval(approval_id, tool_call_id, description, None),
             EventPayload::SubagentStarted {
                 tool_call_id,
                 index,
@@ -432,17 +422,35 @@ impl Translator {
                 tool_call_id,
                 index,
                 event,
-            } => attributed_steps(event, &subagent_run_id(tool_call_id, *index)),
+            } => {
+                // An approval raised inside a subagent interrupts the run just like one raised
+                // directly, attributing the interrupt to the subagent's invocation.
+                if let EventPayload::ApprovalRequired {
+                    approval_id,
+                    tool_call_id: inner_call,
+                    description,
+                    ..
+                } = event.as_ref()
+                {
+                    return self.interrupt_approval(
+                        approval_id,
+                        inner_call,
+                        description,
+                        Some(&subagent_run_id(tool_call_id, *index)),
+                    );
+                }
+                attributed_steps(event, &subagent_run_id(tool_call_id, *index))
+            }
             EventPayload::SubagentCompleted {
                 tool_call_id,
                 index,
                 status,
                 summary,
                 ..
-            } => subagent_completed(tool_call_id, *index, status, summary),
+            } => subagent_completed(tool_call_id, *index, *status, summary),
             EventPayload::RunCompleted { usage, .. } => self.finish_run(usage.as_ref()),
             EventPayload::RunFailed { code, message } => self.fail_run(code, message),
-            EventPayload::RunCancelled { origin } => {
+            EventPayload::RunCancelled { .. } => {
                 self.ended = true;
                 let mut out = self.close_open_messages();
                 out.push(serde_json::json!({
@@ -451,13 +459,6 @@ impl Translator {
                     "runId": self.run_id,
                     "outcome": { "type": "cancelled" },
                 }));
-                if !origin.is_empty() {
-                    out.push(serde_json::json!({
-                        "type": "CUSTOM",
-                        "customType": "silver.cancelled.origin",
-                        "payload": origin,
-                    }));
-                }
                 out
             }
             // run.queued, context.*, run.waiting, steer.*, memory.*, advisor.*,
@@ -468,29 +469,33 @@ impl Translator {
     }
 
     /// Close the stream for a run waiting on outside input: `RUN_FINISHED` with the interrupt
-    /// outcome, answered on a later run's `resume` list.
+    /// outcome, answered on a later run's `resume` list. An approval raised inside a subagent
+    /// attributes the interrupt to that invocation.
     fn interrupt_approval(
         &mut self,
         approval_id: &ApprovalId,
         tool_call_id: &ToolCallId,
         description: &str,
+        subagent_run_id: Option<&str>,
     ) -> Vec<serde_json::Value> {
         self.ended = true;
-        self.close_open_messages();
-        vec![serde_json::json!({
+        let mut out = self.close_open_messages();
+        let mut interrupt = serde_json::json!({
+            "id": approval_id,
+            "reason": "approval",
+            "message": description,
+            "toolCallId": tool_call_id,
+        });
+        if let Some(subagent_run_id) = subagent_run_id {
+            interrupt["subagentRunId"] = serde_json::json!(subagent_run_id);
+        }
+        out.push(serde_json::json!({
             "type": "RUN_FINISHED",
             "threadId": self.thread_id,
             "runId": self.run_id,
-            "outcome": {
-                "type": "interrupt",
-                "interrupts": [{
-                    "id": approval_id,
-                    "reason": "approval",
-                    "message": description,
-                    "toolCallId": tool_call_id,
-                }],
-            },
-        })]
+            "outcome": { "type": "interrupt", "interrupts": [interrupt] },
+        }));
+        out
     }
 
     /// Close a run that did not fail: close open messages and emit `RUN_FINISHED` with usage.
@@ -645,7 +650,8 @@ fn subagent_run_id(tool_call_id: &ToolCallId, index: u32) -> String {
     format!("{tool_call_id}:{index}")
 }
 
-/// The `SUBAGENT_STARTED` event for one invocation.
+/// The `SUBAGENT_STARTED` event for one invocation, tied to the `delegate_task` call that
+/// spawned it so a consumer can nest it under that tool call.
 fn subagent_started(
     tool_call_id: &ToolCallId,
     index: u32,
@@ -656,6 +662,7 @@ fn subagent_started(
         "type": "SUBAGENT_STARTED",
         "subagentRunId": subagent_run_id(tool_call_id, index),
         "name": agent,
+        "parentToolCallId": tool_call_id,
     })];
     if !description.is_empty() {
         out[0]["description"] = serde_json::json!(description);
@@ -668,7 +675,7 @@ fn subagent_started(
 fn subagent_completed(
     tool_call_id: &ToolCallId,
     index: u32,
-    status: &ToolStatus,
+    status: ToolStatus,
     summary: &str,
 ) -> Vec<serde_json::Value> {
     let subagent_run_id = subagent_run_id(tool_call_id, index);
@@ -682,7 +689,7 @@ fn subagent_completed(
             "type": "SUBAGENT_ERROR",
             "subagentRunId": subagent_run_id,
             "message": summary,
-            "code": format!("{other:?}").to_lowercase(),
+            "code": other.as_str(),
         })],
     }
 }
@@ -733,7 +740,7 @@ fn attributed_steps(event: &EventPayload, subagent_run_id: &str) -> Vec<serde_js
             "type": "TOOL_CALL_RESULT",
             "messageId": new_message_id(),
             "toolCallId": tool_call_id,
-            "content": tool_result_text(status, summary),
+            "content": tool_result_text(*status, summary),
         })],
         _ => Vec::new(),
     };
@@ -745,12 +752,12 @@ fn attributed_steps(event: &EventPayload, subagent_run_id: &str) -> Vec<serde_js
 
 /// The result text of a completed tool: the summary as-is, with the status appended when it did
 /// not succeed, since the protocol's result event has no status field of its own.
-fn tool_result_text<'a>(status: &ToolStatus, summary: &'a str) -> std::borrow::Cow<'a, str> {
+fn tool_result_text(status: ToolStatus, summary: &str) -> std::borrow::Cow<'_, str> {
     match status {
         silver_protocol::ToolStatus::Failed
         | silver_protocol::ToolStatus::Denied
         | silver_protocol::ToolStatus::Blocked => {
-            std::borrow::Cow::Owned(format!("{summary} [{status:?}]"))
+            std::borrow::Cow::Owned(format!("{summary} [{}]", status.as_str()))
         }
         _ => std::borrow::Cow::Borrowed(summary),
     }
@@ -1134,13 +1141,13 @@ mod tests {
             "context": [{"description": "the user's timezone", "value": "Europe/Lisbon"}],
             "forwardedProps": {"theme": "dark"},
             "tools": [{"name": "weather", "description": "the weather"}],
-            "state": {"count": 1}
+            "state": {"count": 1},
+            "somethingFuture": {"a": 1}
         }"#,
         );
         assert_eq!(input.resume.len(), 2);
         assert!(matches!(input.resume[0].status, ResumeStatus::Resolved));
         assert!(matches!(input.resume[1].status, ResumeStatus::Cancelled));
-        assert!(input._unknown.is_empty());
         assert_eq!(input.messages.len(), 1);
 
         let rendered =
@@ -1153,15 +1160,57 @@ mod tests {
     }
 
     #[test]
-    fn run_input_strips_unknown_members_into_the_flatten() {
-        let input = input(
-            r#"{
-            "threadId": "thr-1",
-            "runId": "run-1",
-            "messages": [{"role": "user", "content": "hi"}],
-            "somethingFuture": {"a": 1}
-        }"#,
-        );
-        assert!(input._unknown.contains_key("somethingFuture"));
+    fn resume_decision_maps_status_and_answer() {
+        let resolved = ResumeEntry {
+            interrupt_id: "apr_1".into(),
+            status: ResumeStatus::Resolved,
+            payload: Some(serde_json::json!("yes")),
+        };
+        let (decision, answer) = resume_decision(&resolved);
+        assert_eq!(decision, ApprovalDecision::Approve);
+        assert_eq!(answer.as_deref(), Some("yes"));
+
+        let resolved_quiet = ResumeEntry {
+            interrupt_id: "apr_1".into(),
+            status: ResumeStatus::Resolved,
+            payload: None,
+        };
+        let (decision, answer) = resume_decision(&resolved_quiet);
+        assert_eq!(decision, ApprovalDecision::Approve);
+        assert!(answer.is_none());
+
+        let cancelled = ResumeEntry {
+            interrupt_id: "apr_2".into(),
+            status: ResumeStatus::Cancelled,
+            payload: None,
+        };
+        let (decision, answer) = resume_decision(&cancelled);
+        assert_eq!(decision, ApprovalDecision::Deny);
+        assert!(answer.is_none());
+    }
+
+    #[test]
+    fn translator_interrupts_on_a_subagent_approval() {
+        let mut t = Translator::new("thr-1".into(), "run-1".into());
+        let approval_id = silver_protocol::ApprovalId::new();
+        let out = t.push(&silver_event(EventPayload::SubagentStep {
+            tool_call_id: ToolCallId("call_del".into()),
+            index: 0,
+            event: Box::new(EventPayload::ApprovalRequired {
+                approval_id,
+                tool_call_id: ToolCallId("call_inner".into()),
+                name: "skill_manage".into(),
+                risk: silver_protocol::RiskLevel::Write,
+                description: "install skill x".into(),
+                arguments_preview: serde_json::json!({}),
+            }),
+        }));
+        assert_eq!(out[0]["type"], "RUN_FINISHED");
+        assert_eq!(out[0]["outcome"]["type"], "interrupt");
+        let interrupt = &out[0]["outcome"]["interrupts"][0];
+        assert_eq!(interrupt["id"], approval_id.to_string());
+        assert_eq!(interrupt["subagentRunId"], "call_del:0");
+        assert_eq!(interrupt["toolCallId"], "call_inner");
+        assert!(t.ended);
     }
 }

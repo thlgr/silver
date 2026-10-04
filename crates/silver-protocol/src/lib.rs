@@ -495,6 +495,19 @@ pub enum ToolStatus {
     Blocked,
 }
 
+impl ToolStatus {
+    /// The wire name, as serde writes it.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ToolStatus::Running => "running",
+            ToolStatus::Completed => "completed",
+            ToolStatus::Failed => "failed",
+            ToolStatus::Denied => "denied",
+            ToolStatus::Blocked => "blocked",
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ApprovalDecision {

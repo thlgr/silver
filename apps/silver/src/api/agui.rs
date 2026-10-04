@@ -3,7 +3,7 @@
 
 use super::{ApiFailure, AppState};
 use crate::agui::{
-    render_external_context, split_input, ResumeEntry, ResumeStatus, RunAgentInput, Translator,
+    render_external_context, resume_decision, split_input, RunAgentInput, Translator,
     SESSION_SOURCE,
 };
 use axum::{
@@ -14,11 +14,12 @@ use axum::{
     },
     Json,
 };
-use chrono::Utc;
-use futures::Stream;
+use futures::{stream, Stream, StreamExt};
 use silver_core::{error::CoreError, session::Session};
-use silver_protocol::{ApprovalId, CreateRunRequest, EventPayload, MessageInput, RunId, SessionId};
-use std::{collections::VecDeque, convert::Infallible, time::Duration};
+use silver_protocol::{
+    ApprovalDecisionRequest, ApprovalId, CreateRunRequest, EventPayload, MessageInput,
+};
+use std::{collections::BTreeSet, convert::Infallible, sync::Arc, time::Duration};
 
 pub async fn run(
     State(state): State<AppState>,
@@ -34,51 +35,61 @@ pub async fn run(
         context,
         forwarded_props,
         resume,
-        _unknown,
-        ..
     } = input;
     if thread_id.trim().is_empty() || run_id.trim().is_empty() {
         return Err(ApiFailure(CoreError::InvalidRequest(
             "threadId and runId are required".into(),
         )));
     }
-    if !_unknown.is_empty() {
-        tracing::warn!(
-            "stripping unrecognised AG-UI input members: {:?}",
-            _unknown.keys().collect::<Vec<_>>()
-        );
-    }
-    let session = resolve_session(&state, &thread_id).await?;
-
-    // A resuming input answers the interrupts of an earlier run on this thread; when it really
-    // answers one, the parked run's continuation streams back on this connection.
-    if !resume.is_empty() {
-        if let Some(response) = resume_stream(
-            &state,
-            session.id,
-            resume,
-            String::clone(&thread_id),
-            String::clone(&run_id),
+    let (session, fresh) = state
+        .runs
+        .resolve_session(
+            None,
+            None,
+            SESSION_SOURCE.to_string(),
+            Some(thread_id.clone()),
         )
-        .await?
-        {
-            return Ok(response);
-        }
-        // Nothing was answered and nothing is still waiting: the entries were unrecognised, so
-        // the input runs as an ordinary new run.
+        .await?;
+
+    // A resuming input answers this thread's open interrupts; the decisions must be validated
+    // before any of them is applied, and the run's continuation streams back on this connection.
+    if !resume.is_empty() {
+        return resume_run(&state, session, thread_id, run_id, resume).await;
     }
 
-    // Refuse before rewriting history: a concurrent run on the same thread is a 409, not a
-    // destructive replace underneath it.
-    if state.db.has_active_run(session.id).await? {
+    // Refuse a new message while a run is active. When the thread is parked on an interrupt,
+    // say so: the fix is a `resume` input, not a new message.
+    if let Some(active_run) = state
+        .db
+        .session_active_runs(&[session.id])
+        .await?
+        .remove(&session.id)
+    {
+        let pending = state.runs.pending_approvals(active_run);
+        if !pending.is_empty() {
+            let pending = pending
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join(", ");
+            return Err(ApiFailure(CoreError::Conflict(format!(
+                "this thread is waiting on interrupt(s) {pending}; answer with a resume input"
+            ))));
+        }
         return Err(ApiFailure(CoreError::SessionBusy(session.id)));
     }
-    let (seed, prompt) = split_input(messages, session.id).map_err(CoreError::InvalidRequest)?;
-    // The AG-UI messages array is the authoritative conversation, so every run rewrites the
-    // session history from it before the run starts.
-    state.db.replace_session_messages(session.id, &seed).await?;
-    let external_context = render_external_context(&context, forwarded_props.as_ref());
 
+    let (seed, prompt) = split_input(messages, session.id).map_err(CoreError::InvalidRequest)?;
+    // Seed the conversation only when this call created the session: after the first run the
+    // transcript silver builds is authoritative; rewriting it from the client's copy would
+    // degrade it. Earlier messages edited or branched in the client are not reflected.
+    if fresh {
+        for message in seed {
+            state.db.append_message(message).await?;
+        }
+    }
+
+    let external_context = render_external_context(&context, forwarded_props.as_ref());
     let created = state
         .runs
         .create_run(CreateRunRequest {
@@ -96,82 +107,110 @@ pub async fn run(
             external_context,
         })
         .await?;
+    if let Some(monitor) = crate::monitoring::current().filter(|monitor| monitor.is_active()) {
+        tokio::spawn(crate::monitoring::watch_run(
+            monitor,
+            Arc::clone(&state.runs),
+            created.run_id,
+            created.session_id,
+        ));
+    }
     let subscription = state.runs.subscribe(created.run_id, None).await?;
     let translator = Translator::new(thread_id, run_id);
     Ok(sse_response(translate_stream(subscription, translator)))
 }
 
-/// Answer `resume` entries against the thread's pending approvals. Some when an approval was
-/// answered: the response streams that run's continuation after its interrupt, until the run
-/// ends. None when no entry named a pending approval, meaning the input proceeds as a new run.
-async fn resume_stream(
+/// Answer a resuming input: every entry must name a pending approval of this thread's active
+/// run, nothing may be left unanswered, and only when the whole list checks out are the
+/// decisions applied. The run's continuation then streams to its end on this connection.
+async fn resume_run(
     state: &AppState,
-    session_id: SessionId,
-    resume: Vec<ResumeEntry>,
+    session: Session,
     thread_id: String,
     run_id: String,
-) -> Result<Option<Response>, ApiFailure> {
+    resume: Vec<crate::agui::ResumeEntry>,
+) -> Result<Response, ApiFailure> {
+    // The approvals this thread is waiting on. The idle run of a thread with nothing pending
+    // makes every entry stale.
     let active_run = state
         .db
-        .session_active_runs(&[session_id])
+        .session_active_runs(&[session.id])
         .await?
-        .remove(&session_id);
-    let mut resolved: Option<RunId> = None;
+        .remove(&session.id)
+        .ok_or(ApiFailure(CoreError::InvalidRequest(
+            "resume answers an interrupt this thread has not raised; the interrupted run is no longer waiting".into(),
+        )))?;
+    let pending: BTreeSet<ApprovalId> = state
+        .runs
+        .pending_approvals(active_run)
+        .into_iter()
+        .collect();
+    let mut answered: BTreeSet<ApprovalId> = BTreeSet::new();
+    let mut decisions: Vec<ApprovalDecisionRequest> = Vec::new();
     for entry in resume {
-        // The interrupt id we minted is the approval id; anything else names no interrupt here.
-        let Ok(approval_id) = entry.interrupt_id.parse::<ApprovalId>() else {
-            tracing::warn!(
-                "resume entry names no interrupt this server raised: {}",
+        let approval_id = entry.interrupt_id.parse::<ApprovalId>().map_err(|_parse| {
+            ApiFailure(CoreError::InvalidRequest(format!(
+                "resume entry names no interrupt this thread has raised: {}",
                 entry.interrupt_id
-            );
-            continue;
-        };
-        let outcome = match entry.status {
-            ResumeStatus::Resolved => match entry.payload {
-                // A `resolved` entry with a payload answers an ask_user_question call.
-                Some(serde_json::Value::String(answer)) => {
-                    silver_core::agent::ApprovalOutcome::Answered(answer)
-                }
-                _ => silver_core::agent::ApprovalOutcome::Approved,
-            },
-            ResumeStatus::Cancelled => silver_core::agent::ApprovalOutcome::Denied,
-        };
-        match state.runs.resolve_approval(approval_id, outcome) {
-            Some(run) => resolved = Some(run),
-            None => tracing::warn!(
-                "resume entry names no pending approval: {}",
+            )))
+        })?;
+        if !pending.contains(&approval_id) {
+            return Err(ApiFailure(CoreError::InvalidRequest(format!(
+                "resume entry names no pending interrupt on this thread: {}",
                 entry.interrupt_id
-            ),
+            ))));
         }
+        if !answered.insert(approval_id) {
+            return Err(ApiFailure(CoreError::InvalidRequest(format!(
+                "resume answers interrupt {} more than once",
+                entry.interrupt_id
+            ))));
+        }
+        let (decision, answer) = resume_decision(&entry);
+        decisions.push(ApprovalDecisionRequest {
+            approval_id,
+            decision,
+            answer,
+        });
     }
-
-    // An interrupt still open on this thread and not answered by the list must not slip past:
-    // keeping it open by refusing the input is the conforming choice.
-    if let Some(active_run) = active_run {
-        if state.runs.pending_approval(active_run).is_some() {
+    for pending_id in pending {
+        if !answered.contains(&pending_id) {
             return Err(ApiFailure(CoreError::InvalidRequest(
                 "resume leaves an interrupt unanswered; every pending approval needs an entry"
                     .into(),
             )));
         }
     }
+    // The whole list validated; only now are the decisions applied.
+    for request in decisions {
+        state
+            .runs
+            .decide_approval(active_run, request)
+            .map_err(ApiFailure)?;
+    }
 
-    let Some(run) = resolved else {
-        return Ok(None);
-    };
-    let events = state.db.list_events_after(run, 0).await?;
+    // Stream the run from after its last interrupt, so the continuation the answers unblocked
+    // is everything the client has not seen. Approvals raised inside subagents count too.
+    let events = state.db.list_events_after(active_run, 0).await?;
     let resume_after = events
         .iter()
-        .filter(|event| matches!(event.payload, EventPayload::ApprovalRequired { .. }))
+        .filter(|event| is_approval_event(&event.payload))
         .map(|event| event.event_id.0)
         .max()
         .unwrap_or(0);
-    let subscription = state.runs.subscribe(run, Some(resume_after)).await?;
+    let subscription = state.runs.subscribe(active_run, Some(resume_after)).await?;
     let translator = Translator::new(thread_id, run_id);
-    Ok(Some(sse_response(translate_stream(
-        subscription,
-        translator,
-    ))))
+    Ok(sse_response(translate_stream(subscription, translator)))
+}
+
+/// Whether an event is a permission-required one, top-level or raised inside a subagent.
+fn is_approval_event(payload: &EventPayload) -> bool {
+    matches!(payload, EventPayload::ApprovalRequired { .. })
+        || matches!(
+            payload,
+            EventPayload::SubagentStep { event, .. }
+                if matches!(event.as_ref(), EventPayload::ApprovalRequired { .. })
+        )
 }
 
 /// The SSE stream of one AG-UI exchange: `RUN_STARTED` first, then every translated event until
@@ -180,32 +219,25 @@ fn translate_stream(
     subscription: crate::run_manager::EventSubscription,
     translator: Translator,
 ) -> impl Stream<Item = Result<Event, Infallible>> + Send {
-    futures::stream::unfold(
-        (VecDeque::new(), false, subscription, translator),
-        |(mut pending, mut started, mut subscription, mut translator)| async move {
-            loop {
-                if let Some(frame) = pending.pop_front() {
-                    return Some((
-                        Ok::<Event, Infallible>(frame),
-                        (pending, started, subscription, translator),
-                    ));
-                }
-                if !started {
-                    // The input's identity opens the exchange before any silver event.
-                    pending.push_back(frame(&translator.run_started()));
-                    started = true;
-                    continue;
-                }
-                if translator.is_ended() {
-                    return None;
-                }
-                let event = subscription.next().await?;
-                for value in translator.push(&event) {
-                    pending.push_back(frame(&value));
-                }
+    let started = translator.run_started();
+    let first = stream::once(futures::future::ready(Ok(frame(&started))));
+    let rest = stream::unfold(
+        (subscription, translator),
+        |(mut subscription, mut translator)| async move {
+            if translator.is_ended() {
+                return None;
             }
+            let event = subscription.next().await?;
+            let frames = translator
+                .push(&event)
+                .into_iter()
+                .map(|value| Ok(frame(&value)))
+                .collect::<Vec<_>>();
+            Some((stream::iter(frames), (subscription, translator)))
         },
     )
+    .flatten();
+    first.chain(rest)
 }
 
 /// A finished SSE response with the binding's framing and keep-alive.
@@ -223,29 +255,5 @@ fn sse_response(
 
 /// One SSE frame carrying exactly one AG-UI event as its `data` payload.
 fn frame(value: &serde_json::Value) -> Event {
-    let payload = serde_json::to_string(value).expect("AG-UI event serializes");
-    Event::default().data(payload)
-}
-
-/// The session behind an AG-UI thread: sessions are keyed by `(source, externalKey)` so a
-/// thread keeps its conversation across runs, reconnecting to the same session.
-async fn resolve_session(state: &AppState, thread_id: &str) -> Result<Session, ApiFailure> {
-    if let Some(existing) = state
-        .db
-        .find_session_by_external_key(SESSION_SOURCE, thread_id, None)
-        .await?
-    {
-        return Ok(existing);
-    }
-    let now = Utc::now();
-    let session = Session {
-        id: SessionId::new(),
-        workspace_id: None,
-        source: SESSION_SOURCE.to_string(),
-        external_key: Some(thread_id.to_string()),
-        title: None,
-        created_at: now,
-        updated_at: now,
-    };
-    Ok(state.db.create_session(session).await?)
+    Event::default().data(value.to_string())
 }

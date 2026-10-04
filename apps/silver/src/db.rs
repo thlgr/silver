@@ -1711,32 +1711,32 @@ impl Db {
     /// `MAX_INDEXED_TOOL_TEXT_CHARS` is truncated with a marker, so huge payloads are not indexed.
     /// A bare tool result takes its `tool_name` from the tool_calls row.
     pub async fn append_message(&self, m: Message) -> DbResult<()> {
+        let id = m.id.to_string();
+        let session = m.session_id.to_string();
+        let run = m.run_id.map(|r| r.to_string());
+        let role = m.role.as_str().to_string();
+        let content = serde_json::to_string(&m.content)?;
+        let text = indexed_text(m.role, projection_text(&m.content));
+        let (tool_name, tool_call_id) = tool_identity(m.content);
+        let created = ts(m.created_at);
         self.write(move |conn| {
-            insert_message_row(conn, &m)?;
-            Ok(())
-        })
-        .await
-    }
-
-    /// Replace a session's whole message history in one transaction. The AG-UI endpoint hands
-    /// the complete conversation on every run, so the history is rewritten from it each time.
-    pub async fn replace_session_messages(
-        &self,
-        session_id: SessionId,
-        messages: &[Message],
-    ) -> DbResult<()> {
-        let session = session_id.to_string();
-        let rows: Vec<Message> = messages.to_vec();
-        self.write(move |conn| {
-            let tx = conn.transaction()?;
-            tx.execute(
-                "DELETE FROM messages WHERE session_id = ?1",
-                params![session],
+            let tool_name = match (tool_name, tool_call_id) {
+                (Some(name), _) => Some(name),
+                (None, Some(call_id)) => conn
+                    .query_row(
+                        "SELECT name FROM tool_calls WHERE id = ?1",
+                        params![call_id.to_string()],
+                        |row| row.get(0),
+                    )
+                    .optional()?,
+                (None, None) => None,
+            };
+            conn.execute(
+                "INSERT INTO messages \
+                 (id, session_id, run_id, role, content_json, text, tool_name, created_at) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                params![id, session, run, role, content, text, tool_name, created],
             )?;
-            for message in &rows {
-                insert_message_row(&tx, message)?;
-            }
-            tx.commit()?;
             Ok(())
         })
         .await
@@ -3207,38 +3207,6 @@ fn plain_text(content_json: &str) -> String {
     }
 }
 
-/// Insert one message row: the `text` column is the FTS projection, and a bare tool result
-/// takes its `tool_name` from the tool_calls row. Shared by the per-message append and the
-/// whole-history replace.
-fn insert_message_row(conn: &rusqlite::Connection, message: &Message) -> DbResult<()> {
-    let id = message.id.to_string();
-    let session = message.session_id.to_string();
-    let run = message.run_id.map(|r| r.to_string());
-    let role = message.role.as_str().to_string();
-    let content = serde_json::to_string(&message.content)?;
-    let text = indexed_text(message.role, projection_text(&message.content));
-    let (tool_name, tool_call_id) = tool_identity(&message.content);
-    let created = ts(message.created_at);
-    let tool_name = match (tool_name, tool_call_id) {
-        (Some(name), _) => Some(name),
-        (None, Some(call_id)) => conn
-            .query_row(
-                "SELECT name FROM tool_calls WHERE id = ?1",
-                params![call_id.to_string()],
-                |row| row.get(0),
-            )
-            .optional()?,
-        (None, None) => None,
-    };
-    conn.execute(
-        "INSERT INTO messages \
-         (id, session_id, run_id, role, content_json, text, tool_name, created_at) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-        params![id, session, run, role, content, text, tool_name, created],
-    )?;
-    Ok(())
-}
-
 /// The composer's attachment marker: one text part naming a stored file. It is a path for the
 /// model to act on, not something a person wrote, so it stays out of titles, previews and the
 /// index. Keep this in step with MARKER in apps/web/src/lib/state.svelte.js.
@@ -3286,13 +3254,11 @@ fn indexed_text(role: MessageRole, projection: String) -> String {
 /// The first tool identity in a message body: the declared call name when the body
 /// carries a tool call, otherwise the call id from a tool result so the append path can
 /// resolve the name from the tool_calls row.
-fn tool_identity(parts: &[ContentPart]) -> (Option<String>, Option<ToolCallId>) {
+fn tool_identity(parts: Vec<ContentPart>) -> (Option<String>, Option<ToolCallId>) {
     for part in parts {
         match part {
-            ContentPart::ToolCall { name, .. } => return (Some(String::clone(name)), None),
-            ContentPart::ToolResult { tool_call_id, .. } => {
-                return (None, Some(ToolCallId::clone(tool_call_id)))
-            }
+            ContentPart::ToolCall { name, .. } => return (Some(name), None),
+            ContentPart::ToolResult { tool_call_id, .. } => return (None, Some(tool_call_id)),
             _ => {}
         }
     }

@@ -24,18 +24,20 @@ The response is `200 text/event-stream`; each SSE `data:` payload is exactly one
     data: {"type":"RUN_FINISHED","threadId":"my-thread","runId":"run-1"}
 
 The stream closes after the run's terminal event (`RUN_FINISHED` or `RUN_ERROR`). A `threadId`
-keeps its conversation: the session is keyed by it, and each run's `messages` array rewrites
-the session history, so a client that always sends the full conversation stays in sync.
+keeps its conversation: the session is keyed by it, the first run's `messages` seed the
+conversation, and every later run appends its trailing user message to the transcript silver
+already built. Messages edited or branched in the client after the first run are not reflected.
 
 ### Errors
 
 A request rejected before the run starts — malformed JSON, a schema violation, an empty
 `messages`, a last message that is not a `user` message, a busy thread, or a resume list that
-leaves an interrupt unanswered — is an HTTP error status with no stream, using the [silver
-error envelope](api.md#errors). A failure after the run starts travels in-stream as
-`RUN_ERROR` with the silver error code as `code`.
+names an unknown interrupt or leaves one unanswered — is an HTTP error status with no stream,
+using the [silver error envelope](api.md#errors). A failure after the run starts travels
+in-stream as `RUN_ERROR` with the silver error code as `code`.
 
-The bearer [redacted] configured for the API applies to `/agent` like every other route.
+Authentication for `/agent` matches the rest of the API: when the daemon runs with a
+credential configured, requests must present it in an Authorization header.
 
 ## What is supported
 
@@ -47,32 +49,34 @@ The bearer [redacted] configured for the API applies to `/agent` like every othe
   `TOOL_CALL_START/ARGS/END/RESULT`, `RUN_FINISHED` (with token usage, or a `cancelled`
   outcome) and `RUN_ERROR`. Tool-call arguments in events are the sanitized preview silver
   shows in its own UI; the full arguments live in the session transcript.
-- Subagents: `SUBAGENT_STARTED` / `SUBAGENT_FINISHED` / `SUBAGENT_ERROR`, and a subagent's
-  tool calls stream as `TOOL_CALL_*` events attributed with the subagent's `subagentRunId`
-  (minted as `<toolCallId>:<index>`).
-- Interrupt/resume for approvals: a tool call that needs approval ends the run with
+- Subagents: `SUBAGENT_STARTED` (with `parentToolCallId` pointing at its `delegate_task` call)
+  / `SUBAGENT_FINISHED` / `SUBAGENT_ERROR`, and a subagent's tool calls stream as `TOOL_CALL_*`
+  events attributed with the subagent's `subagentRunId` (minted as `<toolCallId>:<index>`).
+- Interrupt/resume for approvals: a tool call that needs approval — inside the run or inside a
+  subagent (the interrupt then carries the subagent's `subagentRunId`) — ends the run with
   `RUN_FINISHED` whose outcome is the interrupt, carrying the approval id as the interrupt id
   (`reason: "approval"`, the tool call and a human-readable message). The run stays parked
-  until answered. The next input on the thread answers it with `resume`:
+  until answered. The next input on the same thread answers it with `resume`:
 
       {"threadId": "my-thread", "runId": "run-2",
-       "resume": [{"interruptId": "<approval id>", "status": "resolved"}]}
+       "resume": [{"interruptId": "<approval id>", "status": "resolved"}],
+       "messages": [{"role": "user", "content": "continue"}]}
 
   `resolved` approves (a string `payload` answers an `ask_user_question` call), `cancelled`
-  denies. The connection then streams the parked run's continuation to its end. A resume
-  entry that names no pending approval is ignored with a warning; leaving a pending approval
-  unanswered refuses the input. The same approval ids also appear on the session's runs, so
-  they can be answered through the web UI or [the API](api.md) instead.
+  denies, and the connection then streams the parked run's continuation to its end. Every
+  pending approval of the thread needs an entry: one naming an unknown or expired interrupt,
+  one answered twice, or a pending one left unanswered all refuse the input before anything is
+  decided. The same approval ids also appear on the session's runs, so they can be answered
+  through the web UI or [the API](api.md) instead.
 - The `context` and `forwardedProps` input fields are injected into the run's system prompt
   (a `# Application Context` block), so the model sees ambient application state.
-- Unknown input members are stripped with a server warning, per the protocol's processing
-  model.
+- Unknown input members are ignored, per the protocol's processing model.
 
 ## What is not supported
 
-- `tools` (frontend tools the application executes): accepted but never offered to the model,
-  so nothing ever calls one. `state` (shared state): accepted; silver keeps no shared state,
-  so no state events are emitted.
+- `tools` (frontend tools the application executes), `state` (shared state) and
+  `protocolVersion` are accepted and ignored: no application tool is ever offered to the
+  model, and silver keeps no shared state, so no state events are emitted.
 - Runs are global (no workspace), so workspace-bound tools are not offered; a URL or
   file-referenced media part is skipped rather than fetched.
 - Activity messages are skipped; the community SDKs' higher-level features (shared state,
