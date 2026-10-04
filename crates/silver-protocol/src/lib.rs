@@ -1047,6 +1047,10 @@ pub struct CreateRunRequest {
     /// Make this message the session's /goal, continued up to this many times.
     #[serde(default)]
     pub goal_budget: Option<u32>,
+    /// Ambient text a client wants in the model's grounding, injected into the run's system
+    /// prompt (the AG-UI endpoint renders its `context` and `forwardedProps` into it).
+    #[serde(default)]
+    pub external_context: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

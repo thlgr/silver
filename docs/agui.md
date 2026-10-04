@@ -30,33 +30,53 @@ the session history, so a client that always sends the full conversation stays i
 ### Errors
 
 A request rejected before the run starts — malformed JSON, a schema violation, an empty
-`messages`, a last message that is not a `user` message, a busy thread — is an HTTP error status
-with no stream, using the [silver error envelope](api.md#errors). A failure after the run starts
-travels in-stream as `RUN_ERROR` with the silver error code as `code`.
+`messages`, a last message that is not a `user` message, a busy thread, or a resume list that
+leaves an interrupt unanswered — is an HTTP error status with no stream, using the [silver
+error envelope](api.md#errors). A failure after the run starts travels in-stream as
+`RUN_ERROR` with the silver error code as `code`.
 
-The bearer token configured for the API applies to `/agent` like every other route.
+The bearer [redacted] configured for the API applies to `/agent` like every other route.
 
 ## What is supported
 
 - Text and inline-image messages in and out; `toolCalls` on assistant messages and `tool`
-  messages round-trip as tool calls and results.
+  messages round-trip as tool calls and results. A `reasoning` message is carried onto the
+  assistant message it precedes, so reasoning providers get their echo.
 - The run lifecycle and streaming events: `RUN_STARTED` (with `protocolVersion: "1.0"`),
   `TEXT_MESSAGE_START/CONTENT/END`, `REASONING_MESSAGE_START/CONTENT/END`,
-  `TOOL_CALL_START/ARGS/END/RESULT`, `RUN_FINISHED` (with token usage) and `RUN_ERROR`.
-  Tool-call arguments in events are the sanitized preview silver shows in its own UI; the full
-  arguments live in the session transcript.
-- Runs are global (no workspace), so workspace-bound tools are not offered.
+  `TOOL_CALL_START/ARGS/END/RESULT`, `RUN_FINISHED` (with token usage, or a `cancelled`
+  outcome) and `RUN_ERROR`. Tool-call arguments in events are the sanitized preview silver
+  shows in its own UI; the full arguments live in the session transcript.
+- Subagents: `SUBAGENT_STARTED` / `SUBAGENT_FINISHED` / `SUBAGENT_ERROR`, and a subagent's
+  tool calls stream as `TOOL_CALL_*` events attributed with the subagent's `subagentRunId`
+  (minted as `<toolCallId>:<index>`).
+- Interrupt/resume for approvals: a tool call that needs approval ends the run with
+  `RUN_FINISHED` whose outcome is the interrupt, carrying the approval id as the interrupt id
+  (`reason: "approval"`, the tool call and a human-readable message). The run stays parked
+  until answered. The next input on the thread answers it with `resume`:
 
-## What is not supported yet
+      {"threadId": "my-thread", "runId": "run-2",
+       "resume": [{"interruptId": "<approval id>", "status": "resolved"}]}
 
-- `tools` (frontend tools the app executes), `context`, `state` and `forwardedProps` on the
-  input are accepted and ignored.
-- Interrupt/resume (approvals): a tool call that needs approval ends the run with
-  `RUN_ERROR` code `approval_required` and stops the run, instead of hanging. Approve the call
-  in the silver UI or via [the API](api.md) and re-run.
-- Subagent events, activity messages and shared-state events are not translated; activity and
-  reasoning messages in the input are skipped.
-- A URL or file-referenced media part is skipped rather than fetched.
+  `resolved` approves (a string `payload` answers an `ask_user_question` call), `cancelled`
+  denies. The connection then streams the parked run's continuation to its end. A resume
+  entry that names no pending approval is ignored with a warning; leaving a pending approval
+  unanswered refuses the input. The same approval ids also appear on the session's runs, so
+  they can be answered through the web UI or [the API](api.md) instead.
+- The `context` and `forwardedProps` input fields are injected into the run's system prompt
+  (a `# Application Context` block), so the model sees ambient application state.
+- Unknown input members are stripped with a server warning, per the protocol's processing
+  model.
+
+## What is not supported
+
+- `tools` (frontend tools the application executes): accepted but never offered to the model,
+  so nothing ever calls one. `state` (shared state): accepted; silver keeps no shared state,
+  so no state events are emitted.
+- Runs are global (no workspace), so workspace-bound tools are not offered; a URL or
+  file-referenced media part is skipped rather than fetched.
+- Activity messages are skipped; the community SDKs' higher-level features (shared state,
+  generative UI) map to protocol pieces silver does not emit.
 
 ## Try it
 

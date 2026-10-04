@@ -439,6 +439,9 @@ pub struct RunContext {
     pub session_started: chrono::DateTime<chrono::Utc>,
     /// The session's plan mode and plan file.
     pub plan: crate::plan::Plan,
+    /// Ambient information a client passed into the run (the AG-UI `context`), rendered into
+    /// the prompt's context tier.
+    pub external_context: Option<String>,
 }
 
 impl RunContext {
@@ -1144,6 +1147,7 @@ pub fn build_system_prompt_with_budget(
         memory: &ctx.memory.memory,
         user: &ctx.memory.user,
         project_context: ctx.instructions_block_with_budget(context_budget),
+        external_context: ctx.external_context.as_deref(),
         model: &ctx.model,
         provider: &ctx.provider,
         is_root: is_root(),

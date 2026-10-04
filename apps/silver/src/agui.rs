@@ -6,7 +6,8 @@ use chrono::Utc;
 use serde::Deserialize;
 use silver_core::session::Message;
 use silver_protocol::{
-    ContentPart, EventPayload, MessageId, MessageRole, RunEvent, TokenUsage, ToolCallId,
+    ApprovalId, ContentPart, EventPayload, MessageId, MessageRole, RunEvent, TokenUsage,
+    ToolCallId, ToolStatus,
 };
 
 /// The protocol version this server speaks.
@@ -27,8 +28,79 @@ pub struct RunAgentInput {
     #[serde(rename = "protocolVersion", default)]
     pub protocol_version: Option<String>,
     pub messages: Vec<AguiMessage>,
+    /// The application's own frontend tools, executed by the app rather than silver. Accepted
+    /// but never offered to the model, so nothing ever calls one.
+    #[serde(default)]
+    pub tools: Vec<serde_json::Value>,
+    /// Ambient information for the run, injected into the run's grounding.
+    #[serde(default)]
+    pub context: Vec<AguiContext>,
+    /// Application-specific values passed through; injected into the grounding like context.
+    #[serde(rename = "forwardedProps", default)]
+    pub forwarded_props: Option<serde_json::Value>,
+    /// The consumer's shared state. Accepted; silver keeps no shared state, so nothing is
+    /// merged and no state events are emitted.
+    #[serde(default)]
+    pub state: Option<serde_json::Value>,
+    /// Answers to the interrupts an earlier run on this thread raised (approvals).
+    #[serde(default)]
+    pub resume: Vec<ResumeEntry>,
+    /// Members this version of the protocol does not define, stripped with a warning per the
+    /// processing model.
     #[serde(flatten)]
-    pub _unused: serde_json::Map<String, serde_json::Value>,
+    pub _unknown: serde_json::Map<String, serde_json::Value>,
+}
+
+/// One named piece of ambient information the application wants the agent to see.
+#[derive(Debug, Deserialize)]
+pub struct AguiContext {
+    pub description: String,
+    pub value: String,
+}
+
+/// An answer to one interrupt an earlier run raised, keyed by the interrupt's id.
+#[derive(Debug, Deserialize)]
+pub struct ResumeEntry {
+    #[serde(rename = "interruptId")]
+    pub interrupt_id: String,
+    pub status: ResumeStatus,
+    #[serde(default)]
+    pub payload: Option<serde_json::Value>,
+}
+
+/// Whether the interrupt was answered or abandoned.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ResumeStatus {
+    Resolved,
+    Cancelled,
+}
+
+/// Render the run's ambient `context` entries and `forwardedProps` into the text block injected
+/// into the prompt. None when the client sent neither.
+pub fn render_external_context(
+    context: &[AguiContext],
+    forwarded_props: Option<&serde_json::Value>,
+) -> Option<String> {
+    let mut out = String::new();
+    for entry in context {
+        if entry.description.trim().is_empty() {
+            continue;
+        }
+        out.push_str(&format!("{}: {}\n", entry.description, entry.value));
+    }
+    let forwarded = forwarded_props.filter(|value| !value.is_null());
+    let mut body = out.trim().to_string();
+    if let Some(value) = forwarded {
+        if !body.is_empty() {
+            body.push('\n');
+        }
+        body.push_str(&format!(
+            "forwardedProps (opaque to the protocol): {}",
+            serde_json::to_string(value).unwrap_or_else(|_| "{}".to_string())
+        ));
+    }
+    (!body.is_empty()).then_some(body)
 }
 
 /// A conversation message, discriminated by `role`. Only the roles that resume a conversation
@@ -326,21 +398,7 @@ impl Translator {
                 preview,
             } => {
                 let mut out = self.close_open_messages();
-                let preview = serde_json::to_string(preview).unwrap_or_default();
-                out.push(serde_json::json!({
-                    "type": "TOOL_CALL_START",
-                    "toolCallId": tool_call_id,
-                    "toolCallName": name,
-                }));
-                out.push(serde_json::json!({
-                    "type": "TOOL_CALL_ARGS",
-                    "toolCallId": tool_call_id,
-                    "delta": preview,
-                }));
-                out.push(serde_json::json!({
-                    "type": "TOOL_CALL_END",
-                    "toolCallId": tool_call_id,
-                }));
+                out.extend(tool_call_started(tool_call_id, name, preview));
                 out
             }
             EventPayload::ToolCompleted {
@@ -348,44 +406,51 @@ impl Translator {
                 status,
                 summary,
             } => {
-                // The status has no protocol event of its own; a failed tool says so in its
-                // result text, which is the only place a consumer can see it.
-                let content: std::borrow::Cow<'_, str> = match status {
-                    silver_protocol::ToolStatus::Failed
-                    | silver_protocol::ToolStatus::Denied
-                    | silver_protocol::ToolStatus::Blocked => {
-                        std::borrow::Cow::Owned(format!("{summary} [{status:?}]"))
-                    }
-                    _ => std::borrow::Cow::Borrowed(summary),
-                };
+                // A failed tool says so in its result text, since the result event has no
+                // status field of its own.
                 vec![serde_json::json!({
                     "type": "TOOL_CALL_RESULT",
                     "messageId": new_message_id(),
                     "toolCallId": tool_call_id,
-                    "content": content,
+                    "content": tool_result_text(status, summary),
                 })]
             }
-            EventPayload::ApprovalRequired { .. } => {
-                // AG-UI expresses approvals as an interrupt that ends the run and resumes it
-                // later; that path is not wired up, so the run stops instead of hanging.
-                self.ended = true;
-                vec![serde_json::json!({
-                    "type": "RUN_ERROR",
-                    "message": "a tool call needs approval, which the AG-UI endpoint does not support yet; the run was stopped",
-                    "code": "approval_required",
-                })]
-            }
+            EventPayload::ApprovalRequired {
+                approval_id,
+                tool_call_id,
+                description,
+                ..
+            } => self.interrupt_approval(approval_id, tool_call_id, description),
+            EventPayload::SubagentStarted {
+                tool_call_id,
+                index,
+                agent,
+                description,
+                ..
+            } => subagent_started(tool_call_id, *index, agent, description),
+            EventPayload::SubagentStep {
+                tool_call_id,
+                index,
+                event,
+            } => attributed_steps(event, &subagent_run_id(tool_call_id, *index)),
+            EventPayload::SubagentCompleted {
+                tool_call_id,
+                index,
+                status,
+                summary,
+                ..
+            } => subagent_completed(tool_call_id, *index, status, summary),
             EventPayload::RunCompleted { usage, .. } => self.finish_run(usage.as_ref()),
             EventPayload::RunFailed { code, message } => self.fail_run(code, message),
             EventPayload::RunCancelled { origin } => {
                 self.ended = true;
-                self.close_open_messages();
-                let mut out = vec![serde_json::json!({
+                let mut out = self.close_open_messages();
+                out.push(serde_json::json!({
                     "type": "RUN_FINISHED",
                     "threadId": self.thread_id,
                     "runId": self.run_id,
                     "outcome": { "type": "cancelled" },
-                })];
+                }));
                 if !origin.is_empty() {
                     out.push(serde_json::json!({
                         "type": "CUSTOM",
@@ -396,10 +461,36 @@ impl Translator {
                 out
             }
             // run.queued, context.*, run.waiting, steer.*, memory.*, advisor.*,
-            // context.injected, plan_mode.exited, subagent.*, heartbeat, replay.gap:
+            // context.injected, plan_mode.exited, heartbeat, replay.gap:
             // not AG-UI events.
             _ => Vec::new(),
         }
+    }
+
+    /// Close the stream for a run waiting on outside input: `RUN_FINISHED` with the interrupt
+    /// outcome, answered on a later run's `resume` list.
+    fn interrupt_approval(
+        &mut self,
+        approval_id: &ApprovalId,
+        tool_call_id: &ToolCallId,
+        description: &str,
+    ) -> Vec<serde_json::Value> {
+        self.ended = true;
+        self.close_open_messages();
+        vec![serde_json::json!({
+            "type": "RUN_FINISHED",
+            "threadId": self.thread_id,
+            "runId": self.run_id,
+            "outcome": {
+                "type": "interrupt",
+                "interrupts": [{
+                    "id": approval_id,
+                    "reason": "approval",
+                    "message": description,
+                    "toolCallId": tool_call_id,
+                }],
+            },
+        })]
     }
 
     /// Close a run that did not fail: close open messages and emit `RUN_FINISHED` with usage.
@@ -547,6 +638,122 @@ impl Translator {
 /// A fresh opaque message id for a text, reasoning or tool-result message the producer mints.
 fn new_message_id() -> String {
     uuid::Uuid::now_v7().to_string()
+}
+
+/// The opaque id of one subagent invocation, minted from the `delegate_task` batch entry.
+fn subagent_run_id(tool_call_id: &ToolCallId, index: u32) -> String {
+    format!("{tool_call_id}:{index}")
+}
+
+/// The `SUBAGENT_STARTED` event for one invocation.
+fn subagent_started(
+    tool_call_id: &ToolCallId,
+    index: u32,
+    agent: &str,
+    description: &str,
+) -> Vec<serde_json::Value> {
+    let mut out = vec![serde_json::json!({
+        "type": "SUBAGENT_STARTED",
+        "subagentRunId": subagent_run_id(tool_call_id, index),
+        "name": agent,
+    })];
+    if !description.is_empty() {
+        out[0]["description"] = serde_json::json!(description);
+    }
+    out
+}
+
+/// The event closing one invocation: `SUBAGENT_FINISHED` on success, `SUBAGENT_ERROR` with a
+/// status-derived code when it failed or was refused.
+fn subagent_completed(
+    tool_call_id: &ToolCallId,
+    index: u32,
+    status: &ToolStatus,
+    summary: &str,
+) -> Vec<serde_json::Value> {
+    let subagent_run_id = subagent_run_id(tool_call_id, index);
+    match status {
+        silver_protocol::ToolStatus::Completed => vec![serde_json::json!({
+            "type": "SUBAGENT_FINISHED",
+            "subagentRunId": subagent_run_id,
+            "result": summary,
+        })],
+        other => vec![serde_json::json!({
+            "type": "SUBAGENT_ERROR",
+            "subagentRunId": subagent_run_id,
+            "message": summary,
+            "code": format!("{other:?}").to_lowercase(),
+        })],
+    }
+}
+
+/// The `TOOL_CALL_START` / `TOOL_CALL_ARGS` / `TOOL_CALL_END` stream for a started tool call.
+/// The args are the sanitized preview silver shows in its own UI.
+fn tool_call_started(
+    tool_call_id: &ToolCallId,
+    name: &str,
+    preview: &serde_json::Value,
+) -> Vec<serde_json::Value> {
+    let preview = serde_json::to_string(preview).unwrap_or_default();
+    vec![
+        serde_json::json!({
+            "type": "TOOL_CALL_START",
+            "toolCallId": tool_call_id,
+            "toolCallName": name,
+        }),
+        serde_json::json!({
+            "type": "TOOL_CALL_ARGS",
+            "toolCallId": tool_call_id,
+            "delta": preview,
+        }),
+        serde_json::json!({
+            "type": "TOOL_CALL_END",
+            "toolCallId": tool_call_id,
+        }),
+    ]
+}
+
+/// Translate one of the subagent's own events, which silver wraps as `SUBAGENT_STEP`. Only its
+/// tool activity survives the wrapping; the output is attributed to the subagent's invocation
+/// and never touches the run's own open text or reasoning messages.
+fn attributed_steps(event: &EventPayload, subagent_run_id: &str) -> Vec<serde_json::Value> {
+    let mut out = match event {
+        EventPayload::ToolStarted {
+            tool_call_id,
+            name,
+            preview,
+            ..
+        } => tool_call_started(tool_call_id, name, preview),
+        EventPayload::ToolCompleted {
+            tool_call_id,
+            status,
+            summary,
+            ..
+        } => vec![serde_json::json!({
+            "type": "TOOL_CALL_RESULT",
+            "messageId": new_message_id(),
+            "toolCallId": tool_call_id,
+            "content": tool_result_text(status, summary),
+        })],
+        _ => Vec::new(),
+    };
+    for value in &mut out {
+        value["subagentRunId"] = serde_json::json!(subagent_run_id);
+    }
+    out
+}
+
+/// The result text of a completed tool: the summary as-is, with the status appended when it did
+/// not succeed, since the protocol's result event has no status field of its own.
+fn tool_result_text<'a>(status: &ToolStatus, summary: &'a str) -> std::borrow::Cow<'a, str> {
+    match status {
+        silver_protocol::ToolStatus::Failed
+        | silver_protocol::ToolStatus::Denied
+        | silver_protocol::ToolStatus::Blocked => {
+            std::borrow::Cow::Owned(format!("{summary} [{status:?}]"))
+        }
+        _ => std::borrow::Cow::Borrowed(summary),
+    }
 }
 
 #[cfg(test)]
@@ -839,16 +1046,122 @@ mod tests {
         assert_eq!(out[0]["outcome"]["type"], "cancelled");
 
         let mut t = Translator::new("thr-1".into(), "run-1".into());
+        let approval_id = silver_protocol::ApprovalId::new();
         let out = t.push(&silver_event(EventPayload::ApprovalRequired {
-            approval_id: silver_protocol::ApprovalId::new(),
+            approval_id,
             tool_call_id: ToolCallId("call_1".into()),
             name: "write_file".into(),
             risk: silver_protocol::RiskLevel::Write,
             description: "overwrite a.txt".into(),
             arguments_preview: serde_json::json!({}),
         }));
-        assert_eq!(out[0]["type"], "RUN_ERROR");
-        assert_eq!(out[0]["code"], "approval_required");
+        // An approval is an interrupt, not an error: the run ends asking, and a later run's
+        // `resume` list answers it.
+        assert_eq!(out[0]["type"], "RUN_FINISHED");
+        assert_eq!(out[0]["outcome"]["type"], "interrupt");
+        let interrupt = &out[0]["outcome"]["interrupts"][0];
+        assert_eq!(interrupt["id"], approval_id.to_string());
+        assert_eq!(interrupt["reason"], "approval");
+        assert_eq!(interrupt["toolCallId"], "call_1");
+        assert_eq!(interrupt["message"], "overwrite a.txt");
         assert!(t.ended);
+    }
+
+    #[test]
+    fn translator_maps_subagent_lifecycle_and_attributed_steps() {
+        let mut t = Translator::new("thr-1".into(), "run-1".into());
+        let mut out = Vec::new();
+        out.extend(t.push(&silver_event(EventPayload::SubagentStarted {
+            tool_call_id: ToolCallId("call_del".into()),
+            index: 0,
+            agent: "general-purpose".into(),
+            description: "explore the code".into(),
+            model: "mock-model".into(),
+            worktree: None,
+        })));
+        out.extend(t.push(&silver_event(EventPayload::SubagentStep {
+            tool_call_id: ToolCallId("call_del".into()),
+            index: 0,
+            event: Box::new(EventPayload::ToolStarted {
+                tool_call_id: ToolCallId("call_inner".into()),
+                name: "read_file".into(),
+                preview: serde_json::json!({"path": "x.rs"}),
+            }),
+        })));
+        out.extend(t.push(&silver_event(EventPayload::SubagentStep {
+            tool_call_id: ToolCallId("call_del".into()),
+            index: 0,
+            event: Box::new(EventPayload::ToolCompleted {
+                tool_call_id: ToolCallId("call_inner".into()),
+                status: silver_protocol::ToolStatus::Completed,
+                summary: "fn main".into(),
+            }),
+        })));
+        out.extend(t.push(&silver_event(EventPayload::SubagentCompleted {
+            tool_call_id: ToolCallId("call_del".into()),
+            index: 0,
+            status: silver_protocol::ToolStatus::Completed,
+            summary: "done".into(),
+            tool_uses: 1,
+            duration_ms: 12,
+            worktree: None,
+        })));
+        assert_eq!(out[0]["type"], "SUBAGENT_STARTED");
+        assert_eq!(out[0]["subagentRunId"], "call_del:0");
+        assert_eq!(out[0]["name"], "general-purpose");
+        assert_eq!(out[1]["type"], "TOOL_CALL_START");
+        assert_eq!(out[1]["subagentRunId"], "call_del:0");
+        assert_eq!(out[1]["toolCallId"], "call_inner");
+        assert_eq!(out[4]["type"], "TOOL_CALL_RESULT");
+        assert_eq!(out[4]["subagentRunId"], "call_del:0");
+        assert_eq!(out[5]["type"], "SUBAGENT_FINISHED");
+        assert_eq!(out[5]["result"], "done");
+        // The subagent's lifecycle does not close the run.
+        assert!(!t.ended);
+    }
+
+    #[test]
+    fn resume_input_parses_and_context_renders() {
+        let input = input(
+            r#"{
+            "threadId": "thr-1",
+            "runId": "run-2",
+            "messages": [{"role": "user", "id": "u1", "content": "hi"}],
+            "resume": [
+                {"interruptId": "apr_1", "status": "resolved", "payload": "go ahead"},
+                {"interruptId": "apr_2", "status": "cancelled"}
+            ],
+            "context": [{"description": "the user's timezone", "value": "Europe/Lisbon"}],
+            "forwardedProps": {"theme": "dark"},
+            "tools": [{"name": "weather", "description": "the weather"}],
+            "state": {"count": 1}
+        }"#,
+        );
+        assert_eq!(input.resume.len(), 2);
+        assert!(matches!(input.resume[0].status, ResumeStatus::Resolved));
+        assert!(matches!(input.resume[1].status, ResumeStatus::Cancelled));
+        assert!(input._unknown.is_empty());
+        assert_eq!(input.messages.len(), 1);
+
+        let rendered =
+            render_external_context(&input.context, input.forwarded_props.as_ref()).unwrap();
+        assert!(rendered.contains("the user's timezone: Europe/Lisbon"));
+        assert!(rendered.contains("theme"));
+
+        let empty = render_external_context(&[], None);
+        assert!(empty.is_none());
+    }
+
+    #[test]
+    fn run_input_strips_unknown_members_into_the_flatten() {
+        let input = input(
+            r#"{
+            "threadId": "thr-1",
+            "runId": "run-1",
+            "messages": [{"role": "user", "content": "hi"}],
+            "somethingFuture": {"a": 1}
+        }"#,
+        );
+        assert!(input._unknown.contains_key("somethingFuture"));
     }
 }

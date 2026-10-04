@@ -66,6 +66,22 @@ impl ApprovalRegistry {
         }
     }
 
+    /// Resolve a pending approval by id alone, returning the run it belonged to. The AG-UI
+    /// resume path answers interrupts by their approval id, not by run.
+    pub fn resolve(&self, id: ApprovalId, outcome: ApprovalOutcome) -> Option<RunId> {
+        let mut map = self.pending.lock().expect("approval lock");
+        let pending = map.remove(&id)?;
+        drop(pending.sender.send(outcome));
+        Some(pending.run_id)
+    }
+
+    /// The approval a run is waiting on, if any.
+    pub fn pending_run(&self, run_id: RunId) -> Option<ApprovalId> {
+        let map = self.pending.lock().expect("approval lock");
+        map.iter()
+            .find_map(|(id, pending)| (pending.run_id == run_id).then_some(*id))
+    }
+
     pub fn cancel_run(&self, run_id: RunId) {
         self.pending
             .lock()
@@ -698,6 +714,8 @@ struct RunTask {
     services: ToolServices,
     plan: Plan,
     input: MessageInput,
+    /// Ambient information a client wants in the run's grounding, injected into the prompt.
+    external_context: Option<String>,
     broadcast_tx: tokio::sync::broadcast::Sender<silver_protocol::RunEvent>,
     control: RunControl,
 }
@@ -1161,6 +1179,7 @@ impl RunManager {
             services,
             plan,
             input: req.message,
+            external_context: req.external_context,
             broadcast_tx,
             control,
         };
@@ -1526,6 +1545,7 @@ impl RunManager {
             platform,
             session_started: started,
             plan: task.plan,
+            external_context: task.external_context,
         });
 
         let history = sanitize_replay_history(
@@ -1708,6 +1728,17 @@ impl RunManager {
         }
     }
 
+    /// Resolve a pending approval raised by any run, returning the run whose turn it unblocks.
+    /// The AG-UI resume path answers interrupts by their approval id rather than by run.
+    pub fn resolve_approval(&self, id: ApprovalId, outcome: ApprovalOutcome) -> Option<RunId> {
+        self.registry.resolve(id, outcome)
+    }
+
+    /// The approval a run is waiting on, if any.
+    pub fn pending_approval(&self, run_id: RunId) -> Option<ApprovalId> {
+        self.registry.pending_run(run_id)
+    }
+
     pub async fn subscribe(
         &self,
         run_id: RunId,
@@ -1838,6 +1869,7 @@ impl RunManager {
                 preset: None,
                 plan_mode: None,
                 goal_budget: None,
+                external_context: None,
             };
             if let Err(error) = self.create_run(request).await {
                 tracing::info!(%error, "goal continuation not started");

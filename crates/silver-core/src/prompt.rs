@@ -178,6 +178,9 @@ pub struct PromptInputs<'a> {
     pub user: &'a str,
     /// Project context files, already labelled and capped by the caller.
     pub project_context: String,
+    /// Ambient application-provided context (the AG-UI `context` and `forwardedProps`),
+    /// already rendered by the caller. Absent when the client sent none.
+    pub external_context: Option<&'a str>,
     /// Model id used by every model gate.
     pub model: &'a str,
     /// Provider id used by the provider gate.
@@ -344,6 +347,7 @@ pub fn build_system_prompt_parts(input: &PromptInputs) -> PromptTiers {
 
     let mut context: Vec<Option<String>> = Vec::new();
     context.push(project_context(input));
+    context.push(application_context(input));
     if has_workspace {
         context.push(workspace_snapshot(input));
     }
@@ -543,6 +547,15 @@ fn project_context(input: &PromptInputs) -> Option<String> {
     Some(format!(
         "# Project Context\n\nThe following project context files have been loaded and should be followed:\n\n{body}"
     ))
+}
+
+/// Ambient context the application handed to the run (the AG-UI `context` and `forwardedProps`).
+fn application_context(input: &PromptInputs) -> Option<String> {
+    let body = input.external_context?.trim();
+    if body.is_empty() {
+        return None;
+    }
+    Some(format!("# Application Context\n\n{body}"))
 }
 
 fn workspace_snapshot(input: &PromptInputs) -> Option<String> {
