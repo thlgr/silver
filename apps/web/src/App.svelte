@@ -7,6 +7,7 @@
   import Panel from './components/Panel.svelte'
   import Settings from './components/Settings.svelte'
   import Login from './components/Login.svelte'
+  import Messages from './components/messages/Messages.svelte'
 
   // A phone-width window overlays the sidebar and panel instead of squeezing the chat, and
   // closes the sidebar once a session is picked.
@@ -23,15 +24,19 @@
 {#if app.link === 'locked'}
   <Login />
 {:else}
-  <div class="app" class:sidebar={sidebarOpen} class:panel={app.panel}>
-    {#if sidebarOpen}
-      <Sidebar onCollapse={() => (sidebarOpen = false)} />
-      <button class="scrim" aria-label="Close sidebar" onclick={() => (sidebarOpen = false)}></button>
-    {/if}
-    <Chat {sidebarOpen} onExpand={() => (sidebarOpen = true)} />
-    {#if app.panel}<Panel />{/if}
-    {#if app.panel}<button class="scrim" aria-label="Close panel" onclick={() => (app.panel = null)}></button>{/if}
-  </div>
+  {#if app.settings.messaging}
+    <Messages />
+  {:else}
+    <div class="app" class:sidebar={sidebarOpen} class:panel={app.panel}>
+      {#if sidebarOpen}
+        <Sidebar onCollapse={() => (sidebarOpen = false)} />
+        <button class="scrim" aria-label="Close sidebar" onclick={() => (sidebarOpen = false)}></button>
+      {/if}
+      <Chat {sidebarOpen} onExpand={() => (sidebarOpen = true)} />
+      {#if app.panel}<Panel />{/if}
+      {#if app.panel}<button class="scrim" aria-label="Close panel" onclick={() => (app.panel = null)}></button>{/if}
+    </div>
+  {/if}
   {#if app.settingsTab}<Settings />{/if}
   {#if app.link === 'down'}<p class="offline" role="status">Connection lost. Retrying…</p>{/if}
 {/if}

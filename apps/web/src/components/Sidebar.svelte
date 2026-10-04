@@ -89,7 +89,7 @@
   async function save() {
     problem = ''
     try {
-      await addWorkspace(path.trim(), name.trim())
+      newSession((await addWorkspace(path.trim(), name.trim())).id)
     } catch (err) {
       // The form stays open with the typed path, so a typo is a quick fix.
       problem = err.message
