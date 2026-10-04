@@ -240,20 +240,20 @@ impl RoutedModel {
                 "no credential for {provider}; sign in with /login {provider}"
             )));
         }
-        Ok(self.build_transport(&route))
+        self.build_transport(&route)
     }
 
     /// The transport for a route, reusing the cached one while the route is unchanged.
-    fn transport(&self, route: &Route) -> Arc<dyn Model> {
+    fn transport(&self, route: &Route) -> CoreResult<Arc<dyn Model>> {
         let fingerprint = route_fingerprint(route);
         if let Ok(cache) = self.cache.lock() {
             if let Some(cached) = cache.as_ref() {
                 if cached.fingerprint == fingerprint {
-                    return Arc::clone(&cached.model);
+                    return Ok(Arc::clone(&cached.model));
                 }
             }
         }
-        let model = self.build_transport(route);
+        let model = self.build_transport(route)?;
         if let Ok(mut cache) = self.cache.lock() {
             *cache = Some(CachedRoute {
                 fingerprint,
@@ -266,11 +266,11 @@ impl RoutedModel {
             source = route.source.as_str(),
             "routing runs through the signed-in provider"
         );
-        model
+        Ok(model)
     }
 
     /// Build a fresh transport for a resolved route.
-    fn build_transport(&self, route: &Route) -> Arc<dyn Model> {
+    fn build_transport(&self, route: &Route) -> CoreResult<Arc<dyn Model>> {
         build_transport(
             route.kind,
             &route.base_url,
@@ -288,35 +288,47 @@ pub fn build_transport(
     key: &str,
     model: &str,
     http: &reqwest::Client,
-) -> Arc<dyn Model> {
+) -> Result<Arc<dyn Model>, CoreError> {
     let http = reqwest::Client::clone(http);
     match kind {
-        ProviderKind::Anthropic => {
-            Arc::new(AnthropicProvider::new(base_url, key, model).with_http_client(http))
-        }
-        ProviderKind::OpenAiCompatible | ProviderKind::Ollama => {
-            Arc::new(OpenAiCompatibleProvider::new(base_url, key, model).with_http_client(http))
-        }
+        ProviderKind::Anthropic => Ok(Arc::new(
+            AnthropicProvider::new(base_url, key, model).with_http_client(http),
+        )),
+        ProviderKind::OpenAiCompatible | ProviderKind::Ollama => Ok(Arc::new(
+            OpenAiCompatibleProvider::new(base_url, key, model).with_http_client(http),
+        )),
         // Copilot holds the GitHub token and mints its own bearer per turn, so the transport
         // is built once and keeps that minted token cached.
-        ProviderKind::Copilot => {
-            Arc::new(CopilotProvider::new(base_url, key, model).with_http_client(http))
-        }
-        ProviderKind::Bedrock => Arc::new(
+        ProviderKind::Copilot => Ok(Arc::new(
+            CopilotProvider::new(base_url, key, model).with_http_client(http),
+        )),
+        ProviderKind::Bedrock => Ok(Arc::new(
             crate::bedrock::BedrockProvider::new(base_url, key, model).with_http_client(http),
-        ),
-        ProviderKind::Vertex => Arc::new(
+        )),
+        ProviderKind::Vertex => Ok(Arc::new(
             crate::vertex::VertexProvider::new(base_url, key, model).with_http_client(http),
-        ),
-        ProviderKind::Codex => {
-            Arc::new(crate::codex::CodexProvider::new(base_url, key, model).with_http_client(http))
-        }
+        )),
+        ProviderKind::Codex => Ok(Arc::new(
+            crate::codex::CodexProvider::new(base_url, key, model).with_http_client(http),
+        )),
         // The ACP agent is a process, not an endpoint: the base URL is the command to spawn,
-        // and it needs no credential of ours.
-        ProviderKind::Acp => Arc::new(crate::acp::AcpProvider::new(base_url, model)),
-        ProviderKind::OpenCode => Arc::new(
+        // and it needs no credential of ours. A stored override wins; otherwise a known agent
+        // mode resolves its own CLI (or reports its setup steps), else the copilot default.
+        ProviderKind::Acp => {
+            let command = if base_url.trim().is_empty() {
+                match crate::agent_modes::command_for(model) {
+                    Ok(Some(command)) => command,
+                    Ok(None) => String::new(),
+                    Err(error) => return Err(error),
+                }
+            } else {
+                base_url.to_string()
+            };
+            Ok(Arc::new(crate::acp::AcpProvider::new(command, model)))
+        }
+        ProviderKind::OpenCode => Ok(Arc::new(
             crate::opencode::OpenCodeProvider::new(base_url, key, model).with_http_client(http),
-        ),
+        )),
     }
 }
 
@@ -353,7 +365,7 @@ impl Model for RoutedModel {
                 "no credential for {provider}; sign in again with /login {provider}"
             )));
         }
-        self.transport(&route).stream(request, cancel).await
+        self.transport(&route)?.stream(request, cancel).await
     }
 }
 

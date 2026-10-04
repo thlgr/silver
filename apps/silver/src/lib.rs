@@ -4,6 +4,7 @@
 
 pub mod acp;
 pub mod advisor;
+pub mod agent_modes;
 pub mod agui;
 pub mod anthropic;
 pub mod api;
@@ -11,6 +12,7 @@ pub mod approval_memory;
 pub mod atomic_file;
 pub mod auth;
 pub mod bedrock;
+pub mod chat;
 pub mod checkpoints;
 pub mod codex;
 pub mod config;

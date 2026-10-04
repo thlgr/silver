@@ -135,6 +135,8 @@ pub async fn list(State(state): State<AppState>) -> Result<Json<Value>, ApiFailu
                 "api_key_env": preset.api_key_env,
                 "key_source": route.as_ref().map(|route| route.source.as_str()),
                 "authenticated": authenticated,
+                // An agent mode whose CLI is installed on this machine; null for any other preset.
+                "installed": crate::agent_modes::installed(preset.id),
                 "active": active.as_deref() == Some(preset.id),
                 // Set up by the user: saved here, active, or a key found in the environment. A
                 // keyless preset nobody touched is not, though it could answer.

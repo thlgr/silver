@@ -4,6 +4,7 @@ pub mod advisor;
 pub mod agents;
 pub mod agui;
 pub mod approvals;
+pub mod chat;
 pub mod checkpoints;
 pub mod commands;
 pub mod credentials;
@@ -70,6 +71,8 @@ pub struct AppState {
     pub advisor: Option<Arc<crate::advisor::JevAdvisor>>,
     /// The subagent definition store behind /v1/agents. None disables the route.
     pub agents: Option<Arc<crate::subagents::AgentStore>>,
+    /// The bot chat behind /v1/chat.
+    pub chat: Arc<crate::chat::ChatHub>,
 }
 
 #[derive(Debug)]
@@ -263,6 +266,19 @@ fn routes() -> Router<AppState> {
         .route("/v1/runs/{run_id}/steer", post(runs::steer))
         .route("/v1/runs/{run_id}/approval", post(runs::approval))
         .route("/agent", post(agui::run))
+        .route("/v1/chat/bots", get(chat::bots).post(chat::create))
+        .route(
+            "/v1/chat/bots/{id}",
+            axum::routing::patch(chat::update).delete(chat::remove),
+        )
+        .route("/v1/chat/bots/{id}/entries", get(chat::entries))
+        .route("/v1/chat/bots/{id}/send", post(chat::send))
+        .route("/v1/chat/bots/{id}/stop", post(chat::stop))
+        .route("/v1/chat/bots/{id}/read", post(chat::read))
+        .route("/v1/chat/bots/{id}/new-session", post(chat::new_session))
+        .route("/v1/chat/entries/{id}/react", post(chat::react))
+        .route("/v1/chat/entries/{id}/answer", post(chat::answer))
+        .route("/v1/chat/events", get(chat::events))
         .route("/v1/checkpoints", get(checkpoints::list))
         .route("/v1/checkpoints/{id}/restore", post(checkpoints::restore))
         .route("/v1/diff", get(git::diff))

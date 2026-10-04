@@ -20,11 +20,12 @@ use silver_protocol::{
 };
 use tokio_rusqlite::rusqlite::{self, params, OptionalExtension};
 
-/// The schema, embedded so a release binary carries its own migration.
-const SCHEMA: &str = include_str!("../../../migrations/0001_initial.sql");
-
-/// Schema version stamped into the user_version pragma once the migration has applied.
-const SCHEMA_VERSION: i64 = 1;
+/// The migrations, embedded so a release binary carries its own. Entry `n` takes a database
+/// from `user_version` `n` to `n + 1`.
+const MIGRATIONS: [&str; 2] = [
+    include_str!("../../../migrations/0001_initial.sql"),
+    include_str!("../../../migrations/0002_chat.sql"),
+];
 
 /// How long SQLite waits for a competing writer before returning SQLITE_BUSY.
 const BUSY_TIMEOUT_MS: u64 = 5_000;
@@ -720,14 +721,17 @@ impl Db {
         })
     }
 
-    /// Apply the embedded migration to an empty database. Safe to call repeatedly: it runs at
-    /// most once, atomically with the user_version stamp.
+    /// Apply every embedded migration the database has not seen. Safe to call repeatedly: each
+    /// runs at most once, atomically with its user_version stamp.
     pub async fn migrate(&self) -> DbResult<()> {
         self.call(|conn| {
             let version: i64 = conn.query_row("PRAGMA user_version", [], |row| row.get(0))?;
-            if version < SCHEMA_VERSION {
-                let script =
-                    format!("BEGIN;\n{SCHEMA}\nPRAGMA user_version = {SCHEMA_VERSION};\nCOMMIT;");
+            let applied = usize::try_from(version).unwrap_or(0);
+            for (index, script) in MIGRATIONS.iter().enumerate().skip(applied) {
+                let script = format!(
+                    "BEGIN;\n{script}\nPRAGMA user_version = {};\nCOMMIT;",
+                    index + 1
+                );
                 conn.execute_batch(&script)?;
             }
             Ok(())
@@ -754,7 +758,7 @@ impl Db {
         }
     }
 
-    async fn call<T, F>(&self, function: F) -> DbResult<T>
+    pub(crate) async fn call<T, F>(&self, function: F) -> DbResult<T>
     where
         F: FnOnce(&mut rusqlite::Connection) -> DbResult<T> + Send + 'static,
         T: Send + 'static,
@@ -764,7 +768,7 @@ impl Db {
 
     /// Run a mutating statement and account for it. Counting on every successful write
     /// lets WAL maintenance run off the request path instead of on it.
-    async fn write<T, F>(&self, function: F) -> DbResult<T>
+    pub(crate) async fn write<T, F>(&self, function: F) -> DbResult<T>
     where
         F: FnOnce(&mut rusqlite::Connection) -> DbResult<T> + Send + 'static,
         T: Send + 'static,
@@ -929,6 +933,10 @@ impl Db {
                 "DELETE FROM memory_changes WHERE workspace_id = ?1",
                 params![id],
             )?;
+            tx.execute(
+                "UPDATE bots SET workspace_id = NULL WHERE workspace_id = ?1",
+                params![id],
+            )?;
             tx.execute("DELETE FROM workspaces WHERE id = ?1", params![id])
                 .map_err(map_constraint)?;
             tx.commit()?;
@@ -1068,7 +1076,7 @@ impl Db {
             let mut stmt = conn.prepare(
                 "SELECT id, workspace_id, source, external_key, title, created_at, updated_at \
                  FROM sessions \
-                 WHERE workspace_id IS ?1 \
+                 WHERE workspace_id IS ?1 AND source != 'chat' \
                    AND (?2 IS NULL OR updated_at < ?2 OR (updated_at = ?2 AND id < ?3)) \
                  ORDER BY updated_at DESC, id DESC \
                  LIMIT ?4",
@@ -1090,6 +1098,32 @@ impl Db {
         self.write(move |conn| {
             let tx = conn.transaction()?;
             delete_session_rows(&tx, &id)?;
+            tx.commit()?;
+            Ok(())
+        })
+        .await
+    }
+
+    /// Remove every session of one source whose external key starts with `prefix`, with their
+    /// runs: a deleted bot takes its chat sessions along.
+    pub async fn delete_sessions_with_key_prefix(
+        &self,
+        source: &str,
+        prefix: &str,
+    ) -> DbResult<()> {
+        let (source, pattern) = (source.to_string(), format!("{prefix}%"));
+        self.write(move |conn| {
+            let tx = conn.transaction()?;
+            let ids: Vec<String> = {
+                let mut stmt = tx.prepare(
+                    "SELECT id FROM sessions WHERE source = ?1 AND external_key LIKE ?2",
+                )?;
+                let rows = stmt.query_map(params![source, pattern], |row| row.get(0))?;
+                rows.collect::<rusqlite::Result<_>>()?
+            };
+            for id in &ids {
+                delete_session_rows(&tx, id)?;
+            }
             tx.commit()?;
             Ok(())
         })
