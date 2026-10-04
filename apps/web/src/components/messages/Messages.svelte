@@ -3,7 +3,7 @@
 <script>
   import { onMount } from 'svelte'
   import { app } from '../../lib/state.svelte.js'
-  import { botById, addFiles, chat, isFileDrag, laneKey, startChat, stopChat, storeFiles, unreadTotal } from '../../lib/chat.svelte.js'
+  import { addFiles, botById, chat, isFileDrag, laneKey, noWorkspace, startChat, stopChat, storeFiles, unreadTotal } from '../../lib/chat.svelte.js'
   import { notify } from '../../lib/state.svelte.js'
   import Avatar from './Avatar.svelte'
   import BotEditor from './BotEditor.svelte'
@@ -41,7 +41,8 @@
     const list = [...(event.dataTransfer?.files ?? [])]
     if (!list.length) return
     const open = botById(chat.selected)
-    if (open?.kind !== 'agent' || !open.workspace_id) return notify('Attachments need a bot with a workspace', true)
+    if (!open) return notify('Open a chat to attach files', true)
+    if (open.kind !== 'agent' || !open.workspace_id) return noWorkspace(open)
     const stored = await storeFiles(open.workspace_id, list)
     if (stored.length) addFiles(laneKey(open.id, chat.thread), stored)
   }
