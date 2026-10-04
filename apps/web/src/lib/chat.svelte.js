@@ -55,6 +55,15 @@ export async function storeFiles(workspace, list) {
   return stored
 }
 
+/** A chat a dropped file cannot land in: say why, and point at the way out. */
+export function noWorkspace(bot) {
+  if (bot?.kind === 'group') return notify('Groups take no files', true)
+  notify('Attachments need a workspace — open the bot settings to give it one', true, {
+    label: 'Bot settings',
+    run: () => (chat.editor = { bot }),
+  })
+}
+
 export const botById = (id) => chat.bots.find((bot) => bot.id === id)
 
 export const membersOf = (bot) => bot.members.map(botById).filter(Boolean)

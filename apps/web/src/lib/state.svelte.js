@@ -65,8 +65,8 @@ $effect.root(() => {
 let source = null
 let noticeTimer = null
 
-export function notify(text, error = false) {
-  app.notice = { text, error }
+export function notify(text, error = false, action = null) {
+  app.notice = { text, error, action }
   clearTimeout(noticeTimer)
   noticeTimer = setTimeout(() => (app.notice = null), error ? 8000 : 4000)
 }

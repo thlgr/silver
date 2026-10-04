@@ -1,7 +1,7 @@
 <!-- The message box under a chat or a thread: send, or stop while the bot (or the group) is
      working there. In a group, typing @ suggests its bots. -->
 <script>
-  import { addFiles, botById, isFileDrag, laneKey, membersOf, removeFile, send, stop, storeFiles, workingIn } from '../../lib/chat.svelte.js'
+  import { addFiles, botById, chat, isFileDrag, laneKey, membersOf, removeFile, send, stop, storeFiles, workingIn } from '../../lib/chat.svelte.js'
   import { attachmentNote, getDraft, notify, setDraft } from '../../lib/state.svelte.js'
   import Avatar from './Avatar.svelte'
   import IconSend from '~icons/lucide/arrow-up'
@@ -66,7 +66,7 @@
     over = false
     if (!isFileDrag(event)) return
     event.preventDefault()
-    if (!folder) return notify('Attachments need a bot with a workspace', true)
+    if (!folder) return noWorkspace(bot)
     attach([...event.dataTransfer.files])
   }
   const dragLeave = (event) => {
@@ -77,7 +77,7 @@
     const images = [...(event.clipboardData?.files ?? [])].filter((file) => file.type.startsWith('image/'))
     if (!images.length) return
     event.preventDefault()
-    if (!folder) return notify('Attachments need a bot with a workspace', true)
+    if (!folder) return noWorkspace(bot)
     attach(images)
   }
 
