@@ -195,7 +195,8 @@ Grouped PORT-1:1 and PORT-MINIMAL tools, with the shared backend each workstream
 ## Implementation status
 
 Verified against the live registry (`crates/silver-core/src/tools/mod.rs` plus each module's
-`register` function); the daemon registers **21 tools** (20 built in plus `delegate_task`), and
+`register` function); the daemon registers **23 tools** (20 built in, `delegate_task`, and the chat's `list_bots` and
+`ask_bot`, which have no upstream counterpart), and
 `GET /v1/capabilities` lists the ones the `[tools]` filters leave enabled. Every PORT-1:1 and
 PORT-MINIMAL row in section 1 is implemented except `clarify`.
 
@@ -249,5 +250,5 @@ and section 2 is unchanged, except `process_manage` as described above.
 - Output file: docs/tool-port-matrix.md (this file).
 - Upstream toolsets.py: 485 lines, _HERMES_CORE_TOOLS = 59 entries (AST-verified, no duplicates).
 - Upstream tools/ directory: 266 files.
-- The Implementation status section was verified against the live registry: 21 tools registered,
+- The Implementation status section was verified against the live registry: 23 tools registered,
   `clarify` the only unimplemented PORT-1:1 row.

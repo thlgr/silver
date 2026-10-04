@@ -35,6 +35,11 @@ silver through the [HTTP API](api.md); it is compiled into the binary and served
   each completed run it starts another toward the goal until the budget (default 20
   continuations) is spent, so it keeps going while you work in another session. Stopping a run
   pauses its goal.
+- **Messages**: the header button (or Settings → General) switches the whole window to a
+  messaging app: a roster of bots with their own chats, group chats, threads, reactions, approval
+  cards and bots that ask each other for help, in Codync's black-and-white look. See
+  [messages.md](messages.md). The mode persists per browser in `app.settings.messaging`; its code is
+  `src/components/messages/` and `src/lib/chat.svelte.js`.
 
 When `server.bearer_token` is set the UI asks for it on first load, keeps it in `localStorage` and
 sends it with every call; Settings has Sign out. An unreachable server shows a "Connection lost"

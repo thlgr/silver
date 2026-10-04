@@ -64,7 +64,7 @@ and key. One run per session at a time: a second returns `session_busy`.
 | POST | `/v1/approvals` | Persist a new global `{mode: "manual"\|"smart"\|"off"}`; refused while pinned |
 | GET, POST | `/v1/advisor` | Jev hints: read `{enabled, has_key, questions}`; switch with `{enabled}` (saved as `agent.jev_hints`) |
 | GET | `/v1/models?provider=` | The models the endpoint advertises (`{provider, default, authenticated, models}`); empty when it has no catalog |
-| GET | `/v1/auth` | Every provider with its endpoint, model, whether a run could authenticate, where the credential comes from (`stored`, `oauth`, `env`, `none`) and `configured` |
+| GET | `/v1/auth` | Every provider with its endpoint, model, whether a run could authenticate, where the credential comes from (`stored`, `oauth`, `env`, `none`), `configured`, and `installed` for an [agent mode](provider-setup.md#external-agent-modes-acp) (its CLI can be launched here; `null` for any other preset) |
 | POST | `/v1/auth/{provider}` | Store `{api_key?, base_url?, model?, activate?}`; the key is never echoed |
 | POST | `/v1/auth/{provider}/activate` | Route new runs through a signed-in provider; 400 if not signed in |
 | DELETE | `/v1/auth/{provider}` | Forget a credential; 204 |
@@ -84,6 +84,16 @@ and key. One run per session at a time: a second returns `session_busy`.
 | GET | `/v1/checkpoints?session_id=…&limit=…` | File snapshots taken before edits |
 | POST | `/v1/checkpoints/{id}/restore` | Restore one into its workspace |
 | GET | `/v1/diff?workspace_id=…&scope=working\|staged\|all\|session&stat=&path=` | The workspace's git diff |
+| GET, POST | `/v1/chat/bots` | The [Messages](messages.md) roster `{bots}`, or create `{kind?, name, description?, instructions?, avatar_shape?, avatar_color?, provider?, model?, workspace_id?, yolo?, members?}`; 201. `kind: "group"` needs `members`, and the same members return the group they already share |
+| PATCH, DELETE | `/v1/chat/bots/{id}` | Change any of those fields and `pinned` (a blank `provider`, `model` or `workspace_id` clears it; a new folder starts a new session), or delete a bot with its chat and sessions; 204 |
+| GET | `/v1/chat/bots/{id}/entries?thread=&before=&limit=` | The newest page of a chat, or of the thread on entry `thread`, oldest first; roots carry their thread `summary`. `before` is a `seq` |
+| POST | `/v1/chat/bots/{id}/send` | `{text, thread_id?, nonce?}`: store the message and start whoever answers it; 201. A repeated `nonce` returns the first message |
+| POST | `/v1/chat/bots/{id}/stop` | Stop a bot or group and drop what is queued; 204 |
+| POST | `/v1/chat/bots/{id}/read` | `{thread_id?}`: mark the chat, or one thread, as read; 204 |
+| POST | `/v1/chat/bots/{id}/new-session` | Start the bot over with a fresh context; 204 |
+| POST | `/v1/chat/entries/{id}/react` | `{emoji}`: toggle the user's reaction |
+| POST | `/v1/chat/entries/{id}/answer` | `{decision, answer?}`: decide an approval card, as `/v1/runs/{id}/approval` does; 204 |
+| GET | `/v1/chat/events` | SSE: `bot`, `bot_removed`, `entry`, `entry_removed` and `resync` (see below) |
 | GET, POST | `/v1/worktrees` | List git worktrees of a workspace, or create `{workspace_id, name?, sync?}` |
 | DELETE | `/v1/worktrees/{name}?workspace_id=…&force=` | Remove one |
 
@@ -145,3 +155,22 @@ A run's status is `queued`, `running`, then `completed`, `failed` or `cancelled`
 `waiting_approval` exists in the protocol but is never stored: detect an approval from
 `approval.required`, not from the run status. A run found `queued` or `running` after a restart
 is marked `failed` with `daemon_restarted`; nothing resumes automatically.
+
+## Bot chat
+
+The [Messages](messages.md) mode is a client of `/v1/chat/*`. A **bot** has `kind` (`agent` or
+`group`), the fields above, and what it is doing: `status` (`idle`, `working`, `needs_input` or
+`error`), `activity`, the latest `thinking`, `working_chat` / `working_thread` (where the turn in
+progress talks), `last_message`, `last_at` and `unread`. A group's status and activity are its busy
+member's. An **entry** is one thing in a chat: `kind` `user`, `agent`, `notice` or `permission`,
+with `seq` (an order that pages with `before`), `thread_id` (a reply's root), `author` (the bot),
+`final` (false while an agent reply is being written), `status` (`queued`, `failed` or `cancelled`
+on a user message), `style` (`error`, `divider` or `request` on a notice), `reactions`, `thread`
+(`{count, last_at, authors, unread}` on a root), `permission` (an approval card) and the `run_id` and
+`session_id` that wrote it; `GET /v1/sessions/{session_id}/messages` has what that run did.
+
+`GET /v1/chat/events` carries `data: {"type": …}` frames named like the type: `bot` (a whole bot),
+`bot_removed {id}`, `entry` (a whole entry, including a reply as it is written), `entry_removed
+{id, chat_id}` and `resync`, which says the stream fell behind. A client connects first, then
+loads `/v1/chat/bots` and the entries it shows, and upserts by `id`; it reloads on `resync` and
+whenever it reconnects. Nothing is replayed.

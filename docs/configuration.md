@@ -141,6 +141,17 @@ command_requires_approval = true
 | `reasoning_budget` | 4096 local, off hosted | Reasoning tokens one call may spend before silver cuts it off and tells the model to act. `0` disables. |
 | `fallback`, `credentials` | none | `[[model.fallback]]` and `[[model.credentials]]`, see [provider-setup.md](provider-setup.md#reliability). |
 
+### External agent modes (ACP)
+
+`kind = "acp"` spawns an external coding agent (Claude Code, OpenCode, Grok Build, …) over the
+Agent Client Protocol instead of calling an API. The base URL is the command to spawn:
+`base_url = "opencode acp"` runs that CLI on this machine. With no base URL, the model name picks
+an agent mode from the catalog and silver finds that CLI itself on your login shell's PATH
+(`claude`, `opencode`, `grok`, …); a mode whose CLI — or whose CLI's ACP support — is missing
+fails its first message with the install steps. The catalog, install and sign-in commands for
+every mode are in [provider-setup.md](provider-setup.md#external-agent-modes-acp). The spawned
+agent keeps its own loop and tools; silver only relays its prose ([transports](provider-setup.md#transports)).
+
 ### `[tools]`
 
 | Key | Default | Notes |

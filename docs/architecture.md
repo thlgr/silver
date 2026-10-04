@@ -405,8 +405,9 @@ does not cancel the run; a client can reconnect with Last-Event-ID and replay.
 One SQLite database at <data_dir>/state.db is driven by a single tokio-rusqlite connection.
 Db::initialize sets PRAGMA foreign_keys = ON, busy_timeout = 5000 ms and journal_mode = WAL.
 
-The whole schema is one migration, `migrations/0001_initial.sql`, embedded in the binary and
-applied once to an empty database. Tables: workspaces, sessions, runs, messages, tool_calls,
+The schema is a ladder of embedded migrations: `migrations/0001_initial.sql` and
+`0002_chat.sql` (`bots`, `chat_entries`, `chat_reads`, see [messages.md](messages.md)), each applied
+once and stamped into `PRAGMA user_version`. Tables: workspaces, sessions, runs, messages, tool_calls,
 approvals, run_events, memory_changes, checkpoints, spend_events, presets, documents and
 document_chunks, plus the FTS5 indexes over messages and document chunks and the triggers that keep
 them in sync.
@@ -430,10 +431,10 @@ them in sync.
   turns it into CoreError::Conflict (code `conflict`, HTTP 409). This is how a duplicate workspace
   name or canonical root is reported.
 
-Startup: main calls Db::migrate, which applies the migration in one transaction together with
-`PRAGMA user_version = 1` when the database is empty, and does nothing to one that already has a
-version. A database made before the schema was squashed to this one file has the same schema only if
-it reached the old version 15; delete an older `state.db`.
+Startup: main calls Db::migrate, which applies each migration the database has not seen in one
+transaction together with its `PRAGMA user_version` stamp, and nothing to a current one. A database
+made before the schema was squashed to one file has the same schema only if it reached the old
+version 15; delete an older `state.db`.
 Then Db::recover_interrupted_runs runs, which sets status = failed, error_code = 'daemon_restarted' and
 finished_at for every queued, running or waiting_approval run. There is no automatic resume.
 
@@ -549,6 +550,13 @@ access.
   follows a run the daemon started in the open session through SessionView.active_run, and
   re-lists sessions every 2 s while any is working or has an active goal. /loop and /heartbeat
   are still timers in the page.
+- Messages mode ([messages.md](messages.md)): the server half is `apps/silver/src/chat/` (`ChatHub`
+  and its per-bot job queue in `turn.rs`, room turns in `group.rs`, bot-to-bot requests in
+  `team.rs`, SQL in `store.rs`) behind `/v1/chat/*`; each bot turn is a normal run through
+  `RunManager::create_run` in a session with source `chat`, so INV-1 and INV-9 hold unchanged. The
+  client half is `src/lib/chat.svelte.js` and `src/components/messages/`, which only renders what
+  `GET /v1/chat/events` says. The team tools (`list_bots`, `ask_bot`) are registered like
+  `delegate_task` but hidden from every run whose session is not a bot's (`Agent::without_tools`).
 
 ## 12. Tool registry and backends
 
@@ -562,7 +570,8 @@ registers the 20 concrete tools in module order: `fs` (`read_file`, `list_files`
 `session_search`, `documents` (`search_documents`), `todo`, `skills` (`skills_list`,
 `skill_view`, `skill_manage`), `lsp` and `web` (`web_search`, `web_extract`). The 21st,
 `delegate_task`, needs a subagent runner, so the daemon registers it itself
-(`tools::delegate::register`) when `[delegation] enabled` is true.
+(`tools::delegate::register`) when `[delegation] enabled` is true, and the chat's two team tools
+(`tools::team::register`: `list_bots`, `ask_bot`, backed by the `Team` service).
 The `Tool` trait supplies the name, description, JSON Schema, a `risk(&args)` function,
 `requires_workspace()` and a `timeout_hint()`; `specs(has_workspace)` and
 `names(has_workspace)` filter workspace-gated tools out of a global run's schema. The
