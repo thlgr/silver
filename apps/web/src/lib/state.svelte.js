@@ -47,7 +47,7 @@ export const app = $state({
   link: 'up', // 'up' | 'down' (the server does not answer) | 'locked' (it wants a bearer token)
   presets: [], // preset catalog from GET /v1/presets
   agents: [], // subagent definitions from GET /v1/agents
-  settings: { theme: 'system', verbose: 'all', focus: false, goalBudget: 20, collapsed: [], order: [], preset: 'minimal', ...load() },
+  settings: { theme: 'system', verbose: 'all', focus: false, messaging: false, goalBudget: 20, collapsed: [], order: [], preset: 'minimal', ...load() },
 })
 
 $effect.root(() => {
@@ -252,7 +252,6 @@ export async function addWorkspace(path, name) {
   const folder = path.split('/').filter(Boolean).at(-1) ?? path
   const w = await api('/v1/workspaces', { method: 'POST', body: { path, name: name || folder } })
   app.workspaces.push(w)
-  newSession(w.id)
   return w
 }
 
@@ -377,8 +376,23 @@ export function splitAttachments(content) {
   return { words: words.join('\n'), files }
 }
 
+/** A chat message's words and the files it names, from the marker lines attachments ride on. */
+export function splitMessage(text) {
+  const files = []
+  const words = text
+    .split('\n')
+    .filter((line) => {
+      const match = MARKER.exec(line.trim())
+      if (match) files.push({ name: match[1], path: match[2] })
+      return !match
+    })
+    .join('\n')
+    .trim()
+  return { words, files }
+}
+
 /** Group persisted messages into turns: one per run, opened by its first user message. */
-function buildTurns(messages) {
+export function buildTurns(messages) {
   const turns = []
   const tools = new Map()
   for (const m of messages) {
@@ -443,28 +457,42 @@ function lineDiff(before, after) {
 /** How a stored attachment is named in the prompt: the model reads that path with a tool. */
 export const attachmentNote = (a) => `[attached: ${a.name} → ${a.path}]`
 
+/** Where a stored attachment's picture is served from; null names a non-image, shown as a file
+ *  chip instead. Only images: a PDF is named but never rendered. */
+export const attachmentSrc = (path) => {
+  const id = currentWorkspace()?.id
+  return id && /\.(png|jpe?g|gif|webp)$/i.test(path)
+    ? `/v1/workspaces/${id}/files?path=${encodeURIComponent(path)}`
+    : null
+}
+
 function toBase64(bytes) {
   let binary = ''
   for (const byte of bytes) binary += String.fromCharCode(byte)
   return btoa(binary)
 }
 
-/** Store files the user attached, so a tool can read them like any workspace file. Uploading
- * on attach rather than on send is what makes a bad file fail next to the chip, not after a
- * long run. A workspace-less chat has nowhere to put a file, so it says so. */
+/** Store one file in a workspace, so a tool can read it like any file there; resolves to
+ *  `{ name, path, bytes, preview }`, where `preview` is a data: URL for a picture (the page's CSP
+ *  does not allow blob: images). */
+export async function storeAttachment(workspace, file) {
+  const data = toBase64(new Uint8Array(await file.arrayBuffer()))
+  const stored = await api(`/v1/workspaces/${workspace}/attachments`, { method: 'POST', body: { name: file.name, data } })
+  return { ...stored, preview: file.type.startsWith('image/') ? `data:${file.type};base64,${data}` : null }
+}
+
+/** Store files the user attached. Uploading on attach rather than on send is what makes a bad
+ * file fail next to the chip, not after a long run. A workspace-less chat has nowhere to put a
+ * file, so it says so. */
 export async function attachFiles(files) {
   const workspace = app.session ? app.session.workspace_id : app.scope
   if (!workspace) return notify('Pick a workspace before attaching a file', true)
   app.notice = null
   for (const file of files) {
     try {
-      const data = toBase64(new Uint8Array(await file.arrayBuffer()))
-      const stored = await api(`/v1/workspaces/${workspace}/attachments`, { method: 'POST', body: { name: file.name, data } })
+      app.attachments.push(await storeAttachment(workspace, file))
       // A later file that lands clears the error an earlier one left.
       app.notice = null
-      const image = file.type.startsWith('image/')
-      // A data: URL, because the page's CSP does not allow blob: images.
-      app.attachments.push({ ...stored, preview: image ? `data:${file.type};base64,${data}` : null })
     } catch (e) {
       notify(e.message, true)
     }

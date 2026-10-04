@@ -1,0 +1,133 @@
+/*
+ * The Messages mode wears Codync's look: a pure black (or white) ground, grey bubbles, and colour
+ * only from the bots, with amber for "needs you" and red for errors. The tokens are scoped to
+ * `.messages`, and the app's own token names are mapped onto them so the pieces shared with the
+ * workbench (tool rows, the trace sheet, code blocks) take the same look inside it.
+ */
+
+.messages {
+  --m-bg: light-dark(#ffffff, #0a0a0a);
+  --m-surface: light-dark(#f4f4f4, #141414);
+  --m-agent: light-dark(#f0f0f0, #1c1c1c);
+  --m-user: light-dark(#e2e2e2, #3a3a3a);
+  --m-border: light-dark(#e6e6e6, #262626);
+  --m-text: light-dark(#141414, #f2f2f2);
+  --m-secondary: light-dark(#6b6b6b, #9a9a9a);
+  --m-tertiary: light-dark(#9b9b9b, #6e6e6e);
+  --m-fill: light-dark(#000000, #ffffff);
+  --m-on-fill: light-dark(#ffffff, #000000);
+  --m-dim: light-dark(#d9d9d9, #333333);
+  --m-danger: light-dark(#c23a2b, #f0a7a7);
+  --m-warning: #f0a030;
+  --m-code: light-dark(#f4f4f4, #111111);
+  --m-added: light-dark(#2e7d32, #8fd18b);
+  --m-removed: light-dark(#c62828, #f0a7a7);
+  --m-shadow: rgb(0 0 0 / 14%);
+
+  /* What the rest of the app reads. */
+  --font: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', 'Inter', system-ui, sans-serif;
+  --text-xs: 12px;
+  --text-sm: 13px;
+  --text-md: 14px;
+  --text-lg: 15px;
+  --text-xl: 22px;
+  --bg: var(--m-bg);
+  --bg-sidebar: var(--m-surface);
+  --bg-raised: var(--m-surface);
+  --bg-sunken: var(--m-code);
+  --bg-hover: light-dark(rgb(0 0 0 / 5%), rgb(255 255 255 / 7%));
+  --bg-active: light-dark(rgb(0 0 0 / 8%), rgb(255 255 255 / 11%));
+  --bg-bubble: var(--m-user);
+  --bg-bubble-agent: var(--m-agent);
+  --line: var(--m-border);
+  --line-strong: light-dark(#d4d4d4, #3a3a3a);
+  --ink: var(--m-text);
+  --ink-2: var(--m-secondary);
+  --ink-3: var(--m-tertiary);
+  --primary: var(--m-fill);
+  --on-primary: var(--m-on-fill);
+  --accent: var(--m-text);
+  --on-accent: var(--m-bg);
+  --danger: var(--m-danger);
+  --success: var(--m-added);
+  --diff-add: light-dark(rgb(46 125 50 / 12%), rgb(143 209 139 / 14%));
+  --diff-del: light-dark(rgb(198 40 40 / 10%), rgb(240 167 167 / 14%));
+  --scrim: light-dark(rgb(0 0 0 / 28%), rgb(0 0 0 / 55%));
+
+  /* Codync's motion: a short ease for hovers, a critically damped spring for layout. */
+  --m-ease: cubic-bezier(0.25, 0.1, 0.25, 1);
+  --m-spring: cubic-bezier(0.22, 1, 0.36, 1);
+
+  background: var(--m-bg);
+  color: var(--m-text);
+  font: 400 var(--text-md) / 1.45 var(--font);
+  -webkit-font-smoothing: antialiased;
+}
+
+.messages :focus-visible { outline: 2px solid var(--m-text); outline-offset: 1px; }
+.messages input:focus-visible, .messages textarea:focus-visible, .messages select:focus-visible { outline: none; }
+/* A card clips to its rounded corners, which would cut an outside ring to a stray line. */
+.messages .card :focus-visible { outline: none; box-shadow: inset 0 0 0 2px var(--m-text); }
+.messages ::selection { background: light-dark(rgb(0 0 0 / 14%), rgb(255 255 255 / 22%)); }
+
+/* Press feedback: shrink a little and spring back. */
+.messages .press { transition: transform 0.05s var(--m-ease), background-color 0.12s var(--m-ease), opacity 0.12s var(--m-ease); }
+.messages .press:active:not(:disabled) { transform: scale(0.98); }
+
+/* An icon-only button, round, on the grounds the chat sits on. */
+.messages .round {
+  display: inline-grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: var(--m-surface);
+  color: var(--m-text);
+  font-size: 15px;
+}
+.messages .round:hover:not(:disabled) { background: var(--bg-active); }
+.messages .round.glass {
+  background: color-mix(in srgb, var(--m-bg) 72%, transparent);
+  backdrop-filter: blur(18px) saturate(1.4);
+  box-shadow: 0 4px 16px var(--m-shadow);
+}
+
+/* The primary pill: Codync's "New Bot", "Save". */
+.messages .pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 36px;
+  padding: 0 20px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--m-fill);
+  color: var(--m-on-fill);
+  font-size: var(--text-md);
+  font-weight: 600;
+}
+.messages .pill:disabled { background: var(--m-dim); color: var(--m-tertiary); opacity: 1; }
+.messages .pill.quiet { background: var(--m-surface); color: var(--m-text); }
+.messages .pill.danger { background: transparent; color: var(--m-danger); }
+
+/* A grouped card of rows split by hairlines: Codync's CardSection. */
+.messages .card-title { margin: 0 0 6px 4px; color: var(--m-text); font-size: var(--text-sm); font-weight: 600; }
+.messages .card + .card-title, .messages .card-note + .card-title { margin-top: 18px; }
+.messages .card { overflow: hidden; border-radius: 16px; background: var(--m-surface); }
+.messages .card > * + * { border-top: 1px solid var(--m-border); }
+.messages .card-note { margin: 6px 4px 0; color: var(--m-tertiary); font-size: var(--text-xs); }
+
+/* The text of a reply: Codync's compact markdown. */
+.messages .prose { line-height: 1.5; }
+.messages .prose p, .messages .prose ul, .messages .prose ol, .messages .prose table, .messages .prose blockquote { margin: 0 0 8px; }
+.messages .prose h1, .messages .prose h2, .messages .prose h3 { margin: 12px 0 4px; font-size: var(--text-lg); font-weight: 650; line-height: 1.35; }
+.messages .prose h1 { font-size: 17px; }
+.messages .prose ul, .messages .prose ol { padding-left: 20px; }
+.messages .prose li + li { margin-top: 2px; }
+.messages .prose a { color: var(--m-text); text-decoration: underline; text-underline-offset: 2px; }
+.messages .prose :not(pre) > code { padding: 1px 5px; border-radius: 5px; background: light-dark(rgb(0 0 0 / 7%), rgb(255 255 255 / 10%)); font-size: 0.9em; }
+.messages .codeblock { margin: 0 0 8px; border-radius: 10px; background: var(--m-code); }
+.messages .codeblock pre { font-size: 12px; }

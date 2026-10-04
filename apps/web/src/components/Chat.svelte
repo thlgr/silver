@@ -12,6 +12,7 @@
   import IconFolder from '~icons/lucide/folder'
   import IconDown from '~icons/lucide/chevron-down'
   import IconCheck from '~icons/lucide/check'
+  import IconMessageSquare from '~icons/lucide/message-square'
 
   let { sidebarOpen, onExpand } = $props()
   let scroller = $state()
@@ -95,6 +96,7 @@
         {/snippet}
       </Popover>
     {/if}
+    <button class="icon-btn" title="Messages" aria-label="Messages" onclick={() => (app.settings.messaging = true)}><IconMessageSquare /></button>
   </header>
 
   {#if empty}
@@ -153,6 +155,7 @@
   .transcript { display: flex; flex-direction: column; gap: var(--space-8); padding-top: var(--space-4); padding-bottom: var(--space-8); }
   .bottom { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-2); padding-bottom: var(--space-2); }
   .bottom :global(.popover) { justify-self: start; }
+
 
   .empty { justify-content: center; }
   .empty header { position: absolute; top: 0; }

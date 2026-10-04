@@ -209,6 +209,10 @@
           <input type="checkbox" bind:checked={app.settings.focus} />
         </label>
         <label class="setting">
+          <div><div>Messages</div><p>Switch silver to a messaging app: bots that keep their own chats, group chats, threads, and bots that ask each other for help.</p></div>
+          <input type="checkbox" bind:checked={app.settings.messaging} />
+        </label>
+        <label class="setting">
           <div><div>Goal budget</div><p>Continuations a /goal may run before it stops.</p></div>
           <input class="field narrow" type="number" min="1" bind:value={app.settings.goalBudget} />
         </label>

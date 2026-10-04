@@ -1,11 +1,11 @@
 <!-- One exchange: the user's prompt, the process steps, the final reply and its actions. -->
 <script>
   import { untrack } from 'svelte'
-  import { app, rewind, notify, currentWorkspace } from '../lib/state.svelte.js'
+  import { app, rewind, notify, attachmentSrc } from '../lib/state.svelte.js'
   import { authImage } from '../lib/api.js'
   import { markdown, copyCode } from '../lib/markdown.js'
   import { tokens, seconds, cost } from '../lib/format.js'
-  import { explores, phrase } from '../lib/tools.js'
+  import { isStandalone, finalStep, groupParts, summary } from '../lib/process.js'
   import Step from './Step.svelte'
   import ToolCall from './ToolCall.svelte'
   import AgentList from './AgentList.svelte'
@@ -30,35 +30,15 @@
       : 0,
   )
 
-  // An attached picture comes back from the daemon through its own read-only file route, so
-  // the conversation keeps showing it after a reload. Only images; a PDF is named instead.
-  const fileSrc = (path) => {
-    const id = currentWorkspace()?.id
-    return id && /\.(png|jpe?g|gif|webp)$/i.test(path)
-      ? `/v1/workspaces/${id}/files?path=${encodeURIComponent(path)}`
-      : null
-  }
-
-  // A finished turn's reply is its newest text; while running, only a trailing text is the
-  // reply so the process keeps its chronological order.
-  const final = $derived(
-    turn.running ? (turn.steps.at(-1)?.kind === 'text' ? turn.steps.at(-1) : null) : turn.steps.findLast((s) => s.kind === 'text'),
-  )
+  const final = $derived(finalStep(turn))
   const process = $derived(turn.steps.filter((s) => s !== final))
   const hidden = $derived(app.settings.focus || app.settings.verbose === 'off')
-  // Texts and delegations stay outside the tool groups, so neither is folded away; other
-  // consecutive steps collapse together, then read-only exploration collapses further.
-  const standalone = (s) => s.kind === 'text' || s.name === 'delegate_task'
+  // Only the newest tool step keeps showing while a run streams in 'new' verbosity; the rest
+  // of the process then groups exactly as it does once finished.
   const parts = $derived.by(() => {
     const lastTool = process.findLastIndex((s) => s.kind !== 'text')
-    const shown = turn.running && app.settings.verbose === 'new' ? process.filter((s, i) => standalone(s) || i === lastTool) : process
-    const out = []
-    for (const step of shown) {
-      if (standalone(step)) out.push(step)
-      else if (Array.isArray(out.at(-1))) out.at(-1).push(step)
-      else out.push([step])
-    }
-    return out.map((part) => (Array.isArray(part) ? groupExplores(part) : part))
+    const shown = turn.running && app.settings.verbose === 'new' ? process.filter((s, i) => isStandalone(s) || i === lastTool) : process
+    return groupParts(shown)
   })
   // What the reader watched stream stays open when the run ends, so finishing never reflows
   // the transcript under them; turns loaded from history start collapsed.
@@ -66,49 +46,6 @@
   let opened = $state({})
   let exploreOpen = $state({})
   const isOpen = (i) => opened[i] ?? (watched && app.settings.verbose === 'all')
-
-  // A maximal run of read-only calls (member calls interleaved with reasoning or injected
-  // steps) collapses into one "Explored" group, ending at its last member call. A run of one
-  // never groups: small models reason between calls, so the rule needs two or more.
-  function groupExplores(steps) {
-    const out = []
-    let i = 0
-    while (i < steps.length) {
-      const step = steps[i]
-      if (!explores(step) && step.kind !== 'reasoning' && step.kind !== 'injected') {
-        out.push(step)
-        i++
-        continue
-      }
-      let j = i
-      let lastMember = -1
-      let members = 0
-      while (j < steps.length && (explores(steps[j]) || steps[j].kind === 'reasoning' || steps[j].kind === 'injected')) {
-        if (explores(steps[j])) { lastMember = j; members++ }
-        j++
-      }
-      if (members >= 2) {
-        out.push({ kind: 'explore', steps: steps.slice(i, lastMember + 1) })
-        i = lastMember + 1
-      } else {
-        out.push(step)
-        i++
-      }
-    }
-    return out
-  }
-
-  const flatten = (part) => part.flatMap((s) => (s.kind === 'explore' ? s.steps : [s]))
-
-  const summary = (part) => {
-    const steps = flatten(part)
-    const tools = steps.filter((s) => s.kind === 'tool')
-    const failed = tools.filter((s) => ['failed', 'blocked'].includes(s.status)).length
-    const denied = tools.filter((s) => s.status === 'denied').length
-    const hints = steps.filter((s) => s.kind === 'advisor' && s.hints.length).length
-    const n = tools.length || steps.length
-    return { head: phrase(steps) ?? `${n} step${n === 1 ? '' : 's'}`, failed, denied, hints }
-  }
 
   function copy(text) {
     navigator.clipboard.writeText(text)
@@ -124,7 +61,7 @@
       <div class="bubble">
         {turn.user}
         {#each turn.attachments ?? [] as file (file.path)}
-          {@const src = fileSrc(file.path)}
+          {@const src = attachmentSrc(file.path)}
           {#if src}<img class="attachment" use:authImage={src} alt={file.name} />{:else}<span class="attachment file" title={file.path}>{file.name}</span>{/if}
         {/each}
       </div>

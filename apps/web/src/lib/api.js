@@ -87,9 +87,9 @@ export function authImage(img, url) {
   return { update: show }
 }
 
-/** Follow a run's SSE stream with fetch, because EventSource cannot send the bearer token. A
- *  dropped connection resumes after the last event id it saw. */
-export function subscribe(runId, onEvent) {
+/** Follow an SSE stream with fetch, because EventSource cannot send the bearer token. A dropped
+ *  connection resumes after the last event id it saw, and `onOpen` runs each time one is made. */
+function follow(url, onEvent, onOpen) {
   const stop = new AbortController()
   let lastId = null
 
@@ -106,12 +106,13 @@ export function subscribe(runId, onEvent) {
   ;(async () => {
     while (!stop.signal.aborted) {
       try {
-        const res = await fetch(`/v1/runs/${runId}/events`, {
+        const res = await fetch(url, {
           headers: { ...authorization(), ...(lastId && { 'last-event-id': lastId }) },
           signal: stop.signal,
         })
         report(res.status === 401 ? 'locked' : 'up')
         if (!res.ok) return
+        onOpen?.()
         const reader = res.body.pipeThrough(new TextDecoderStream()).getReader()
         let buffer = ''
         for (;;) {
@@ -130,3 +131,8 @@ export function subscribe(runId, onEvent) {
   })()
   return { close: () => stop.abort() }
 }
+
+export const subscribe = (runId, onEvent) => follow(`/v1/runs/${runId}/events`, onEvent)
+
+/** The bot chat's live stream: `onOpen` is the moment to (re)load what is on screen. */
+export const subscribeChat = (onEvent, onOpen) => follow('/v1/chat/events', onEvent, onOpen)
