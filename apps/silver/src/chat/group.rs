@@ -305,6 +305,7 @@ mod tests {
             avatar_color: "blue".into(),
             provider: None,
             model: None,
+            reasoning_effort: None,
             workspace_id: None,
             yolo: false,
             members: Vec::new(),

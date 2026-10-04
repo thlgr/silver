@@ -65,6 +65,9 @@ pub struct BotView {
     pub provider: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
+    /// The reasoning effort the bot's turns run at; absent follows the daemon default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_effort: Option<String>,
     /// The project folder the bot works in; absent means no folder.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workspace_id: Option<WorkspaceId>,
@@ -241,6 +244,8 @@ pub struct CreateBotRequest {
     #[serde(default)]
     pub model: Option<String>,
     #[serde(default)]
+    pub reasoning_effort: Option<String>,
+    #[serde(default)]
     pub workspace_id: Option<WorkspaceId>,
     #[serde(default)]
     pub yolo: bool,
@@ -249,7 +254,7 @@ pub struct CreateBotRequest {
 }
 
 /// PATCH /v1/chat/bots/{id}. An absent field leaves that attribute unchanged; a blank
-/// `provider`, `model` or `workspace_id` clears it.
+/// `provider`, `model`, `workspace_id` or `reasoning_effort` clears it.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct UpdateBotRequest {
     #[serde(default)]
@@ -266,6 +271,8 @@ pub struct UpdateBotRequest {
     pub provider: Option<String>,
     #[serde(default)]
     pub model: Option<String>,
+    #[serde(default)]
+    pub reasoning_effort: Option<String>,
     #[serde(default)]
     pub workspace_id: Option<String>,
     #[serde(default)]

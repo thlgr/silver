@@ -27,6 +27,7 @@
     avatar_color: bot?.avatar_color ?? pick(COLORS).id,
     provider: bot?.provider ?? '',
     model: bot?.model ?? '',
+    reasoning_effort: bot?.reasoning_effort ?? null,
     workspace_id: bot ? (bot.workspace_id ?? '') : (workspace ?? app.scope ?? app.workspaces[0]?.id ?? ''),
     yolo: bot?.yolo ?? false,
   })
@@ -52,6 +53,15 @@
   const PERMISSIONS = [
     { value: 'ask', label: 'Ask me' },
     { value: 'auto', label: 'Approve automatically' },
+  ]
+  // The daemon's accepted levels, weakest to strongest; blank follows the daemon default.
+  const EFFORTS = [
+    { value: '', label: 'Default' },
+    { value: 'none', label: 'None' },
+    { value: 'minimal', label: 'Minimal' },
+    { value: 'low', label: 'Low' },
+    { value: 'medium', label: 'Medium' },
+    { value: 'high', label: 'High' },
   ]
   const chosenProvider = $derived(draft.provider || app.activeProvider)
   // An external agent brings its own tools, so "no workspace" does not mean it cannot touch files.
@@ -130,6 +140,7 @@
     {/if}
     <Choice label="Agent" value={draft.provider} options={providers} onchange={(id) => ((draft.provider = id), (draft.model = ''))} />
     <Combo label="Model" bind:value={draft.model} suggestions={models} placeholder="Default" />
+    <Choice label="Effort" value={draft.reasoning_effort ?? ''} options={EFFORTS} onchange={(id) => (draft.reasoning_effort = id || null)} />
     <Choice label="Permissions" value={draft.yolo ? 'auto' : 'ask'} options={PERMISSIONS} onchange={(id) => (draft.yolo = id === 'auto')} />
   </div>
   <p class="card-note">

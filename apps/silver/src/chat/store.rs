@@ -20,6 +20,7 @@ pub struct BotRow {
     pub avatar_color: String,
     pub provider: Option<String>,
     pub model: Option<String>,
+    pub reasoning_effort: Option<String>,
     pub workspace_id: Option<WorkspaceId>,
     pub yolo: bool,
     pub members: Vec<String>,
@@ -50,7 +51,7 @@ pub fn now_ms() -> i64 {
 }
 
 const BOT_COLUMNS: &str = "id, kind, name, description, instructions, avatar_shape, avatar_color, \
-    provider, model, workspace_id, yolo, members, pinned, epoch, created_at";
+    provider, model, workspace_id, yolo, members, pinned, epoch, created_at, reasoning_effort";
 
 fn bot_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<BotRow> {
     let kind: String = row.get(1)?;
@@ -72,6 +73,7 @@ fn bot_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<BotRow> {
         pinned: row.get(12)?,
         epoch: row.get(13)?,
         created_at: row.get(14)?,
+        reasoning_effort: row.get(15)?,
     })
 }
 
@@ -149,7 +151,7 @@ impl Db {
             conn.execute(
                 &format!(
                     "INSERT OR REPLACE INTO bots ({BOT_COLUMNS}) \
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)"
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)"
                 ),
                 params![
                     bot.id,
@@ -167,6 +169,7 @@ impl Db {
                     bot.pinned,
                     bot.epoch,
                     bot.created_at,
+                    bot.reasoning_effort,
                 ],
             )?;
             Ok(bot)
@@ -605,6 +608,7 @@ mod tests {
                 avatar_color: "blue".into(),
                 provider: None,
                 model: None,
+                reasoning_effort: None,
                 workspace_id: Some(workspace.id),
                 yolo: false,
                 members: Vec::new(),
