@@ -54,7 +54,7 @@ fn idempotency_key(headers: &HeaderMap) -> Result<Option<String>, ApiFailure> {
 /// The fail-fast body for new work while the emergency stop is engaged. The code is the
 /// stable "daemon_paused" string; pausing is a local operational state rather than a
 /// protocol domain error, so the ErrorCode enum is deliberately not extended.
-fn paused_response() -> Response {
+pub(crate) fn paused_response() -> Response {
     let body = serde_json::json!({
         "error": {
             "code": "daemon_paused",

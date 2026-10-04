@@ -17,7 +17,7 @@ pub const CSP: &str =
 
 /// True when a request path belongs to the UI rather than the HTTP API.
 pub fn is_ui_path(path: &str) -> bool {
-    path != "/health" && path != "/v1" && !path.starts_with("/v1/")
+    path != "/health" && path != "/v1" && path != "/agent" && !path.starts_with("/v1/")
 }
 
 pub async fn serve(uri: Uri) -> Response {

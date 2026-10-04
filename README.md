@@ -28,6 +28,7 @@ mix.
 | | |
 | --- | --- |
 | [docs/tools.md](docs/tools.md) | The tools, approvals, presets, plan mode, subagents, attachments |
+| [docs/agui.md](docs/agui.md) | The AG-UI endpoint (`POST /agent`) for AG-UI-compatible fronts |
 | [docs/web-ui.md](docs/web-ui.md) | What the browser UI does, slash commands, UI development |
 | [docs/configuration.md](docs/configuration.md) | Flags, `config.toml`, `secrets.env`, environment variables |
 | [docs/provider-setup.md](docs/provider-setup.md) | Providers, sign-in, fallbacks, context window |

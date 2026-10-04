@@ -66,6 +66,18 @@ impl ApprovalRegistry {
         }
     }
 
+    /// The approvals a run is waiting on, in any order. Parallel subagents share the parent's
+    /// gate, so a run can have several pending at once.
+    pub fn pending(&self, run_id: RunId) -> Vec<ApprovalId> {
+        self.pending
+            .lock()
+            .expect("approval lock")
+            .iter()
+            .filter(|(_, pending)| pending.run_id == run_id)
+            .map(|(id, _)| *id)
+            .collect()
+    }
+
     pub fn cancel_run(&self, run_id: RunId) {
         self.pending
             .lock()
@@ -698,6 +710,8 @@ struct RunTask {
     services: ToolServices,
     plan: Plan,
     input: MessageInput,
+    /// Ambient information a client wants in the run's grounding, injected into the prompt.
+    external_context: Option<String>,
     broadcast_tx: tokio::sync::broadcast::Sender<silver_protocol::RunEvent>,
     control: RunControl,
 }
@@ -1011,7 +1025,7 @@ impl RunManager {
     }
 
     /// Validate a session or create one bound to the requested scope (INV-3, INV-5).
-    async fn resolve_session(
+    pub(crate) async fn resolve_session(
         &self,
         session_id: Option<SessionId>,
         workspace_id: Option<WorkspaceId>,
@@ -1161,6 +1175,7 @@ impl RunManager {
             services,
             plan,
             input: req.message,
+            external_context: req.external_context,
             broadcast_tx,
             control,
         };
@@ -1526,6 +1541,7 @@ impl RunManager {
             platform,
             session_started: started,
             plan: task.plan,
+            external_context: task.external_context,
         });
 
         let history = sanitize_replay_history(
@@ -1708,6 +1724,11 @@ impl RunManager {
         }
     }
 
+    /// The approvals a run is waiting on, in any order.
+    pub fn pending_approvals(&self, run_id: RunId) -> Vec<ApprovalId> {
+        self.registry.pending(run_id)
+    }
+
     pub async fn subscribe(
         &self,
         run_id: RunId,
@@ -1838,6 +1859,7 @@ impl RunManager {
                 preset: None,
                 plan_mode: None,
                 goal_budget: None,
+                external_context: None,
             };
             if let Err(error) = self.create_run(request).await {
                 tracing::info!(%error, "goal continuation not started");
