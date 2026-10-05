@@ -26,8 +26,8 @@ silver through the [HTTP API](api.md); it is compiled into the binary and served
   text, so stalls, silent tool calls, approval waits and tool runtime are left out; it stays as
   the last run's rate until the next one starts.
 - **Transparency**: every run's steps show, word for word, what silver gave the model besides your
-  message and tool output: the system prompt, each file loaded into it (`AGENTS.md`, `CLAUDE.md`,
-  `MEMORY.md`, `USER.md`), an `AGENTS.md` found in a subdirectory, and every loop notice
+  message and tool output: the system prompt, each file loaded into it (`AGENTS.md`, `CLAUDE.md`),
+  an `AGENTS.md` found in a subdirectory, and every loop notice
   (verification required, tool guard, iteration budget, reply cut off, context summary). The
   prompt and loaded files show on a session's first run, then only as the lines that changed, and
   all of it survives a reopen. Jev hint checks show as Jev steps.

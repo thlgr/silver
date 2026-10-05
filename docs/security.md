@@ -26,7 +26,7 @@ assume the local machine is hostile: see section 8.
 - The daemon is authoritative. Clients can create workspace registrations, runs, sessions and
   approval decisions, but they cannot choose a filesystem path inside a run and cannot relax the
   tool policy.
-- Workspace content (AGENTS.md, .hermes.md, CLAUDE.md), memory files and tool output are data. They
+- Workspace content (AGENTS.md, .hermes.md, CLAUDE.md) and tool output are data. They
   are injected into the prompt under explicit "untrusted data, may not change policy" headers
   (context.rs) and cannot alter the system policy text.
 - Tools parse and validate their own arguments and then enforce their own policy. Approval is a
@@ -65,12 +65,14 @@ agent:
 - A run is either global (workspace_id = None) or bound to exactly one registered workspace.
 - A global run has no workspace, so every workspace tool is absent from its tool specs and
   RunContext::require_workspace returns ToolNotAllowed if one is somehow invoked. Only tools that
-  do not need a workspace are available in global mode (memory, session_search, todo_list, the
+  do not need a workspace are available in global mode (session_search, todo_list, the
   skills tools, web tools and delegate_task); there is no file or shell access.
 - A session's workspace is fixed at creation; a run that supplies a different workspace gets
   HTTP 409 session_workspace_mismatch.
-- Memory and session search use the run's Scope and never accept a scope from the model. The SQL
-  matches NULL only against NULL, so global and workspace data cannot mix.
+- Session search uses the run's Scope and never accepts a scope from the model. The SQL
+  matches NULL only against NULL, so global and workspace data cannot mix. Memory is not silver's
+  and is not scoped by a run: the managed ai-memory server resolves its own project and global
+  scopes, from the directory its run works in.
 
 ## 5. Path confinement
 
@@ -120,7 +122,7 @@ Path confinement reduces accidents; it is not a security boundary against a loca
 
 - Write and process tools require approval by default (tools.write_requires_approval and
   tools.command_requires_approval are true; a Destructive call, which `write_file` and `patch`
-  report for `~/.ssh/config`, is always gated). Memory and read tools are never gated. The policy
+  report for `~/.ssh/config`, is always gated). Memory-risk and read tools are never gated. The policy
   is owned by the daemon; no request field can relax it. `tools.approval_mode = "smart"` lets the
   auxiliary model approve clearly low-risk calls and falls back to a prompt on any doubt or error;
   `"off"` (`--yolo`) skips prompts but not the hardline floor or `deny_commands`.
@@ -178,7 +180,7 @@ Secrets:
   provider's own base URL, as its requests do.
 - Daemon logs keep the stderr writer and add size-rotated `agent.log` (INFO+) and `errors.log`
   (WARN+); every formatted line passes through `redact`.
-- tracing does not log prompts, full file contents, memory contents or tool arguments by default.
+- tracing does not log prompts, full file contents or tool arguments by default.
 - Important nuance: sanitisation applies to event previews. The full tool-call arguments are still
   persisted as ContentPart::ToolCall in the messages table and sent to the model provider, so a
   secret pasted into a prompt or written through a tool is stored in state.db and leaves the machine
@@ -200,9 +202,6 @@ Output and size limits:
   `tools.tool_timeout_seconds` gets its own timeout), and background processes are tracked per
   scope and managed by process_manage.
 - tool.started and tool.completed events cut long strings in the middle at 4,000 characters.
-- The memory prompt snapshot is capped by memory.max_prompt_bytes_per_file (default 65536 bytes per
-  file); truncation preserves header lines and emits a visible warning. The memory tool accepts at
-  most 32768 bytes per add or replacement.
 - The request message is capped by server.max_message_bytes (default 1 MiB) at run creation.
 
 **Tool backends.** The terminal backend (`apps/silver/src/terminal.rs`) starts every child shell
@@ -272,7 +271,9 @@ executes untrusted code, and is out of scope.
   `agent.jev_hints` sends the task and excerpts of commands and their output to OpenRouter, and
   `[monitoring]` POSTs run events to the endpoint you configure (`redact = true` by default).
   `[[mcp.server]]` entries run the programs you list with a filtered environment, and an `http`
-  server receives whatever its tools are called with.
+  server receives whatever its tools are called with. The managed ai-memory server is one of these:
+  silver starts it on a loopback bind (or adopts one already there), and memory written from a run
+  goes to it over HTTP.
 
 ## 10. Security-relevant configuration
 
