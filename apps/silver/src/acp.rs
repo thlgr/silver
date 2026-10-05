@@ -2,7 +2,7 @@
 //! It runs its own loop and tools; only its prose returns. Sessions are keyed by
 //! [ModelRequest::cache_key], so each turn sends only the newest message.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
 use std::process::Stdio;
 use std::sync::{Arc, OnceLock, PoisonError};
 
@@ -618,7 +618,7 @@ impl Model for AcpProvider {
             connection: Arc::clone(&connection),
             session: session_id.clone(),
             finished: false,
-            pending: VecDeque::new(),
+            pending: None,
             message: None,
         };
         tokio::spawn(async move {
@@ -653,8 +653,8 @@ struct Turn {
     connection: Arc<Connection>,
     session: String,
     finished: bool,
-    /// Events made from one update, waiting their turn (an assistant text starts before its delta).
-    pending: VecDeque<ModelStreamEvent>,
+    /// One event made from an update, waiting its turn (an assistant text starts before its delta).
+    pending: Option<ModelStreamEvent>,
     /// The assistant message the agent is writing, so a new one is told apart from its chunks.
     message: Option<String>,
 }
@@ -664,7 +664,7 @@ impl Turn {
     /// after the agent answered, not when the answer arrives, so text sent just before it is never
     /// lost; only a failed prompt, or a cancel, ends it early.
     async fn next(&mut self) -> Option<CoreResult<ModelStreamEvent>> {
-        if let Some(event) = self.pending.pop_front() {
+        if let Some(event) = self.pending.take() {
             return Some(Ok(event));
         }
         if self.finished {
@@ -710,7 +710,7 @@ impl Turn {
                                 self.message = id;
                             }
                             if started {
-                                self.pending.push_back(ModelStreamEvent::TextDelta(text));
+                                self.pending = Some(ModelStreamEvent::TextDelta(text));
                                 return Some(Ok(ModelStreamEvent::TextStarted));
                             }
                             ModelStreamEvent::TextDelta(text)
@@ -868,7 +868,7 @@ mod tests {
                 connection: Connection::new(tokio::io::empty(), tokio::io::sink(), None),
                 session: "a".into(),
                 finished: false,
-                pending: VecDeque::new(),
+                pending: None,
                 message: None,
             };
             assert!(matches!(turn.next().await, Some(Err(_))));
@@ -886,7 +886,7 @@ mod tests {
             connection: Connection::new(tokio::io::empty(), tokio::io::sink(), None),
             session: "a".into(),
             finished: false,
-            pending: VecDeque::new(),
+            pending: None,
             message: None,
         };
         let chunk = |id: &str, text: &str| AcpUpdate::Message {

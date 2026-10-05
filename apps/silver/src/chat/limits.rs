@@ -213,16 +213,12 @@ impl ChatHub {
     }
 
     async fn read_limits(&self, routed: &RoutedModel) {
-        let bots = match self.db.chat_bots().await {
-            Ok(bots) => bots,
+        let agents = match self.agents(None).await {
+            Ok(agents) => agents,
             Err(error) => {
                 return tracing::warn!(%error, "the bots could not be read for their limits")
             }
         };
-        let agents: Vec<&BotRow> = bots
-            .iter()
-            .filter(|bot| bot.kind == BotKind::Agent)
-            .collect();
         let mut providers: Vec<Cow<str>> = Vec::new();
         for bot in &agents {
             let provider = self.provider_of(bot);
@@ -262,28 +258,21 @@ impl ChatHub {
         if self.state().limits.get("claude") == Some(&windows) {
             return;
         }
-        match self.db.chat_bots().await {
-            Ok(bots) => {
-                let agents: Vec<&BotRow> = bots
-                    .iter()
-                    .filter(|bot| bot.kind == BotKind::Agent)
-                    .collect();
-                self.take_reading("claude", windows, &agents).await;
-            }
+        match self.agents(None).await {
+            Ok(agents) => self.take_reading("claude", windows, &agents).await,
             Err(error) => tracing::warn!(%error, "the bots could not be read for their limits"),
         }
     }
 
     /// A provider's new reading: kept, shown on the bots that answer with it, and the session
     /// window checked against [STOP_AT].
-    async fn take_reading(&self, provider: &str, windows: Vec<LimitWindow>, agents: &[&BotRow]) {
+    async fn take_reading(&self, provider: &str, windows: Vec<LimitWindow>, agents: &[BotRow]) {
         let over = windows
             .first()
             .filter(|session| session.percent >= STOP_AT)
             .map(|session| format!("Stopped: {}", describe(provider, session)));
         let users: Vec<&BotRow> = agents
             .iter()
-            .copied()
             .filter(|bot| self.provider_of(bot) == provider)
             .collect();
         if self.keep(provider, windows).await {
