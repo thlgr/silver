@@ -66,12 +66,30 @@ pub enum Task {
     Ask(String),
 }
 
-impl Job {
-    fn task(&self) -> Task {
+/// A task without owning its id: matching a queued or running job costs no copy.
+#[derive(Clone, Copy)]
+pub enum TaskRef<'a> {
+    Reply,
+    Room(&'a str),
+    Ask(&'a str),
+}
+
+impl Task {
+    fn as_ref(&self) -> TaskRef<'_> {
         match self {
-            Job::User { .. } => Task::Reply,
-            Job::Room { lane, .. } => Task::Room(lane.chat.clone()),
-            Job::Ask { id, .. } => Task::Ask(id.clone()),
+            Task::Reply => TaskRef::Reply,
+            Task::Room(chat) => TaskRef::Room(chat),
+            Task::Ask(id) => TaskRef::Ask(id),
+        }
+    }
+}
+
+impl Job {
+    fn task(&self) -> TaskRef<'_> {
+        match self {
+            Job::User { .. } => TaskRef::Reply,
+            Job::Room { lane, .. } => TaskRef::Room(&lane.chat),
+            Job::Ask { id, .. } => TaskRef::Ask(id),
         }
     }
 }
@@ -525,19 +543,19 @@ impl ChatHub {
     // MARK: stopping
 
     /// End the turns of `bot` that `wanted` picks: drop the queued ones and stop the running one.
-    pub(super) async fn stop_turns(&self, bot: &str, wanted: impl Fn(&Task) -> bool) {
+    pub(super) async fn stop_turns(&self, bot: &str, wanted: impl Fn(TaskRef<'_>) -> bool) {
         let (dropped, run) = {
             let mut state = self.state();
             let mut dropped = Vec::new();
             if let Some(queue) = state.queues.get_mut(bot) {
                 let (gone, kept): (Vec<Job>, Vec<Job>) = std::mem::take(queue)
                     .into_iter()
-                    .partition(|job| wanted(&job.task()));
+                    .partition(|job| wanted(job.task()));
                 queue.extend(kept);
                 dropped = gone;
             }
             let run = state.runtime.get_mut(bot).and_then(|live| {
-                if !live.task.as_ref().is_some_and(wanted) {
+                if !live.task.as_ref().is_some_and(|task| wanted(task.as_ref())) {
                     return None;
                 }
                 if live.run.is_none() {

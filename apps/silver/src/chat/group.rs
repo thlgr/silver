@@ -3,7 +3,7 @@
 //! speaks ends it. A newer message, or Stop, ends a turn before its next speaker.
 
 use super::store::BotRow;
-use super::turn::{Job, Lane, Task};
+use super::turn::{Job, Lane, TaskRef};
 use super::ChatHub;
 use silver_core::error::CoreResult;
 use silver_protocol::chat::{ChatEntry, EntryKind};
@@ -59,7 +59,7 @@ pub(super) async fn stop(hub: &Arc<ChatHub>, group: &BotRow) {
     for member in &group.members {
         hub.stop_turns(
             member,
-            |task| matches!(task, Task::Room(chat) if *chat == group.id),
+            |task| matches!(task, TaskRef::Room(chat) if chat == group.id.as_str()),
         )
         .await;
     }

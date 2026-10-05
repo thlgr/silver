@@ -2,7 +2,7 @@
 //! both chats get a notice that follows it. Self-asks, repeats and wait cycles are refused.
 
 use super::store::BotRow;
-use super::turn::{Job, Task};
+use super::turn::{Job, TaskRef};
 use super::{invalid, new_entry, new_id, preview, ChatHub, SESSION_SOURCE};
 use async_trait::async_trait;
 use silver_core::error::CoreResult;
@@ -100,8 +100,11 @@ impl ChatHub {
             }
             drop(self.save_entry(entry).await);
         }
-        self.stop_turns(target, |task| matches!(task, Task::Ask(ask) if ask == id))
-            .await;
+        self.stop_turns(
+            target,
+            |task| matches!(task, TaskRef::Ask(ask) if ask == id),
+        )
+        .await;
     }
 }
 
@@ -190,21 +193,26 @@ impl Team for TeamBackend {
             .ok_or_else(|| invalid(format!("no bot is called {to}; list_bots shows the team")))?;
         let id = new_id();
         hub.state().asks.begin(&id, &me.id, &asked.id)?;
+        let target = asked.id;
+        let asked_name = asked.name;
         let mut pending = Pending {
             hub: Arc::clone(hub),
             id,
-            target: asked.id.clone(),
+            target,
             notices: Vec::new(),
             done: false,
         };
-        for (bot, heading) in [
-            (&me, format!("Asked {}: {}", asked.name, preview(message))),
+        for (bot_id, heading) in [
             (
-                &asked,
+                me.id.as_str(),
+                format!("Asked {}: {}", asked_name, preview(message)),
+            ),
+            (
+                pending.target.as_str(),
                 format!("Request from {}: {}", me.name, preview(message)),
             ),
         ] {
-            let mut notice = new_entry(&bot.id, None, EntryKind::Notice);
+            let mut notice = new_entry(bot_id, None, EntryKind::Notice);
             notice.text = format!("{heading}\nWaiting for a reply…");
             notice.style = Some("request".into());
             notice.status = Some("pending".into());
@@ -218,7 +226,7 @@ impl Team for TeamBackend {
         );
         let (reply, answer) = oneshot::channel();
         hub.enqueue(
-            &asked.id,
+            &pending.target,
             Job::Ask {
                 id: pending.id.clone(),
                 prompt,
@@ -238,7 +246,7 @@ impl Team for TeamBackend {
         };
         match result {
             Ok(reply) => {
-                let detail = format!("Reply from {}:\n{}", asked.name, preview(&reply));
+                let detail = format!("Reply from {}:\n{}", asked_name, preview(&reply));
                 pending.finish("completed", &detail).await;
                 Ok(reply)
             }
