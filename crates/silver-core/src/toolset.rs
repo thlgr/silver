@@ -10,8 +10,6 @@ pub const FILES: &str = "files";
 pub const TERMINAL: &str = "terminal";
 /// Web search and extraction tools.
 pub const WEB: &str = "web";
-/// Persistent memory and session search.
-pub const MEMORY: &str = "memory";
 /// Skill discovery and management.
 pub const SKILLS: &str = "skills";
 /// Delegating work to a subagent.
@@ -21,8 +19,7 @@ pub const MCP: &str = "mcp";
 
 /// Every built-in toolset in a stable order. An empty enabled list selects all
 /// of these, and this is the usual defaults argument.
-pub const BUILTIN_TOOLSETS: [&str; 8] =
-    [CORE, FILES, TERMINAL, WEB, MEMORY, SKILLS, DELEGATION, MCP];
+pub const BUILTIN_TOOLSETS: [&str; 7] = [CORE, FILES, TERMINAL, WEB, SKILLS, DELEGATION, MCP];
 
 /// The built-in toolset owning a tool name, CORE for unknown names; the default Tool::toolset.
 pub fn builtin_toolset_for(tool_name: &str) -> &'static str {
@@ -32,7 +29,6 @@ pub fn builtin_toolset_for(tool_name: &str) -> &'static str {
         }
         "run_command" | "execute_code" | "bash" | "process_manage" => TERMINAL,
         "web_search" | "web_extract" => WEB,
-        "memory" | "session_search" | "search_documents" => MEMORY,
         "skills_list" | "skill_view" | "skill_manage" => SKILLS,
         "delegate_task" | "list_bots" | "ask_bot" => DELEGATION,
         name if name == MCP || name.starts_with("mcp_") || name.starts_with("mcp-") => MCP,

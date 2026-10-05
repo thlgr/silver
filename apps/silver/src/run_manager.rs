@@ -12,7 +12,6 @@ use silver_core::context::{load_project_instructions, RunContext, DEFAULT_BASE_P
 use silver_core::error::{CoreError, CoreResult};
 use silver_core::event::EventEmitter;
 use silver_core::guard::cost::{CostGuard, CostGuardConfig};
-use silver_core::memory::MemoryStore;
 use silver_core::model::{Model, ModelMessage, ModelRequest, ModelStreamEvent};
 use silver_core::plan::Plan;
 use silver_core::services::ToolServices;
@@ -141,7 +140,7 @@ impl ApprovalGate for ChannelApprovalGate {
         cancel: &CancellationToken,
     ) -> ApprovalOutcome {
         let receiver = self.registry.register(request.approval_id, request.run_id);
-        let arguments_hash = silver_core::memory::content_hash(
+        let arguments_hash = silver_core::hash::content_hash(
             &silver_core::guard::tool_guardrails::canonical_tool_args(request.arguments),
         );
         let record = ApprovalRecord {
@@ -639,7 +638,6 @@ pub struct ApprovalSetup {
 pub struct RunManager {
     db: Db,
     agent: Arc<Agent>,
-    memory: Arc<dyn MemoryStore>,
     config: Arc<Config>,
     /// models.dev registry resolver, so a run clamps its reasoning effort to the model's
     /// supported levels. None when the daemon has no resolver.
@@ -734,7 +732,6 @@ impl RunManager {
     pub fn new(
         db: Db,
         agent: Arc<Agent>,
-        memory: Arc<dyn MemoryStore>,
         config: Arc<Config>,
         context_resolver: Option<Arc<crate::context_length::ModelContextResolver>>,
         services: ToolServices,
@@ -772,7 +769,6 @@ impl RunManager {
         Arc::new(Self {
             db,
             agent,
-            memory,
             config,
             context_resolver,
             cost_guard,
@@ -1512,7 +1508,6 @@ impl RunManager {
             Some(id) => Scope::Workspace(id),
             None => Scope::Global,
         };
-        let memory_snapshot = self.memory.load(&scope).await.unwrap_or_default();
         let project_instructions = match &task.workspace {
             Some(workspace) => {
                 load_project_instructions(&workspace.canonical_root).unwrap_or_default()
@@ -1537,7 +1532,6 @@ impl RunManager {
             workspace: task.workspace,
             session: task.session,
             model: String::clone(&task.model),
-            memory: memory_snapshot,
             project_instructions,
             base_system_prompt: DEFAULT_BASE_PROMPT.to_string(),
             services: task.services,

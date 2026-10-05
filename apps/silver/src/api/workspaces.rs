@@ -54,9 +54,6 @@ pub async fn create(
         updated_at: now,
     };
     let workspace = state.db.create_workspace(workspace).await?;
-    drop(std::fs::create_dir_all(
-        state.memory.scope_dir(&Scope::Workspace(workspace.id)),
-    ));
     Ok((StatusCode::CREATED, Json(workspace_view(workspace))))
 }
 
@@ -390,9 +387,6 @@ pub async fn remove(
     }
     state.db.delete_workspace(id).await?;
     state.runs.cleanup_scope(&Scope::Workspace(id)).await;
-    drop(std::fs::remove_dir_all(
-        state.memory.scope_dir(&Scope::Workspace(id)),
-    ));
     tracing::info!(workspace_id = %workspace.id, "workspace removed");
     Ok(StatusCode::NO_CONTENT)
 }

@@ -10,6 +10,7 @@
   import Conversation from './Conversation.svelte'
   import Details from './Details.svelte'
   import GroupEditor from './GroupEditor.svelte'
+  import Memory from './Memory.svelte'
   import NewChat from './NewChat.svelte'
   import Toast from './Toast.svelte'
   import Replies from './Replies.svelte'
@@ -25,7 +26,7 @@
   const bot = $derived(chat.selected ? botById(chat.selected) : null)
   // A panel sits beside the conversation when there is room, and over it when there is not.
   const wide = $derived(width >= 680 && !narrow)
-  const panel = $derived(bot ? (chat.thread ? 'thread' : details ? 'details' : null) : null)
+  const panel = $derived(bot ? (chat.thread ? 'thread' : chat.memory ? 'memory' : details ? 'details' : null) : null)
 
   // A dragged file is dropped anywhere in the window, not just on the box: nothing navigates
   // away, and when there is nowhere to store it the user is told why.
@@ -70,6 +71,7 @@
   $effect(() => {
     chat.selected
     chat.thread = null
+    chat.memory = false
     if (narrow) details = false
   })
 
@@ -86,10 +88,14 @@
     addEventListener('pointerup', stop)
   }
 
-  const closePanel = () => (chat.thread ? (chat.thread = null) : (details = false))
+  const closePanel = () => {
+    if (chat.thread) chat.thread = null
+    else if (chat.memory) chat.memory = false
+    else details = false
+  }
 </script>
 
-<svelte:window onkeydown={(e) => e.key === 'Escape' && chat.thread && !chat.editor && !chat.trace && (chat.thread = null)} />
+<svelte:window onkeydown={(e) => e.key === 'Escape' && (chat.thread || chat.memory) && !chat.editor && !chat.trace && closePanel()} />
 
 <div class="messages" class:narrow class:dropping={windowOver} ondragover={dragOver} ondrop={dropFiles} style:--side="{widthOf()}px">
   {#if !narrow || (!bot && !chat.composing)}
@@ -102,13 +108,13 @@
     </div>
   {/if}
   {#if !narrow || bot || chat.composing}
-    <div class="stage" class:panel={panel && wide} style:--panel="{panel === 'thread' ? 'min(420px, 45%)' : '292px'}" bind:clientWidth={width}>
+    <div class="stage" class:panel={panel && wide} style:--panel="{panel === 'thread' || panel === 'memory' ? 'min(420px, 45%)' : '292px'}" bind:clientWidth={width}>
       <main>
         {#if chat.composing}
           <NewChat onclose={() => (chat.composing = false)} />
         {:else if bot}
           {#key bot.id}
-            <Conversation botId={bot.id} details={panel === 'details'} ontoggle={() => ((chat.thread = null), (details = !details))} onback={narrow ? () => (chat.selected = null) : undefined} />
+            <Conversation botId={bot.id} details={panel === 'details'} ontoggle={() => ((chat.thread = null), (details = !details))} onmemory={() => ((chat.thread = null), (chat.memory = !chat.memory))} onback={narrow ? () => (chat.selected = null) : undefined} />
           {/key}
         {:else}
           <div class="welcome">
@@ -127,6 +133,8 @@
         <div class="aside" class:over={!wide}>
           {#if panel === 'thread'}
             {#key chat.thread}<Replies botId={bot.id} root={chat.thread} onclose={closePanel} />{/key}
+          {:else if panel === 'memory'}
+            {#key bot.workspace_id}<Memory workspaceId={bot.workspace_id} onclose={closePanel} />{/key}
           {:else}
             <Details botId={bot.id} onclose={closePanel} />
           {/if}

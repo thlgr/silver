@@ -520,21 +520,6 @@ pub enum ApprovalDecision {
     Deny,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum MemoryFileKind {
-    Memory,
-    User,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum MemoryOpKind {
-    Add,
-    Replace,
-    Remove,
-}
-
 /// One incremental agent event. Persisted for replay and streamed as SSE.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct RunEvent {
@@ -623,12 +608,6 @@ pub enum EventPayload {
     ApprovalResolved {
         approval_id: ApprovalId,
         decision: ApprovalDecision,
-    },
-    #[serde(rename = "memory.changed")]
-    MemoryChanged {
-        file: MemoryFileKind,
-        operation: MemoryOpKind,
-        content_hash: String,
     },
     #[serde(rename = "run.waiting")]
     RunWaiting { reason: String },
@@ -727,7 +706,6 @@ impl EventPayload {
             EventPayload::ToolCompleted { .. } => "tool.completed",
             EventPayload::ApprovalRequired { .. } => "approval.required",
             EventPayload::ApprovalResolved { .. } => "approval.resolved",
-            EventPayload::MemoryChanged { .. } => "memory.changed",
             EventPayload::RunWaiting { .. } => "run.waiting",
             EventPayload::SteerDelivered { .. } => "steer.delivered",
             EventPayload::AdvisorChecked { .. } => "advisor.checked",
@@ -774,6 +752,34 @@ pub struct WorkspaceView {
     pub path: String,
     pub available: bool,
     pub created_at: DateTime<Utc>,
+}
+
+/// One memory page, as the Messages memory panel lists it.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct MemoryPageView {
+    pub path: String,
+    pub title: String,
+    pub kind: String,
+    #[serde(default)]
+    pub updated_at: Option<String>,
+}
+
+/// The memory panel's view of one workspace's ai-memory project.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct MemoryView {
+    /// The ai-memory workspace and project the folder resolves to.
+    pub workspace: String,
+    pub project: String,
+    pub pages: Vec<MemoryPageView>,
+}
+
+/// A full memory page, body included.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct MemoryPageBody {
+    pub path: String,
+    pub title: String,
+    pub kind: String,
+    pub body_markdown: String,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -1154,7 +1160,6 @@ pub struct LimitsView {
     pub max_concurrent_runs: u32,
     pub run_timeout_seconds: u64,
     pub max_message_bytes: u64,
-    pub memory_max_prompt_bytes_per_file: u64,
 }
 
 /// Configuration schema version shared by the daemon and the CLI so the two can never drift.

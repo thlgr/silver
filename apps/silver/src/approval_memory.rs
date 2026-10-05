@@ -3,7 +3,7 @@
 
 use serde_json::Value;
 use silver_core::guard::tool_guardrails::canonical_tool_args;
-use silver_core::memory::content_hash;
+use silver_core::hash::content_hash;
 use silver_protocol::{Scope, SessionId};
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};

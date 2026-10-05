@@ -283,7 +283,6 @@ pub struct AgentConfig {
     pub turn_liveness_poll_s: f64,
     pub empty_guard_enabled: bool,
     pub empty_cost_threshold_usd: f64,
-    pub memory_max_prompt_bytes_per_file: usize,
     pub max_context_bytes: usize,
     /// Whether to compact the request context before it reaches `max_context_bytes`.
     pub context_compaction_enabled: bool,
@@ -335,7 +334,6 @@ impl Default for AgentConfig {
             turn_liveness_poll_s: 15.0,
             empty_guard_enabled: true,
             empty_cost_threshold_usd: 0.25,
-            memory_max_prompt_bytes_per_file: 65536,
             max_context_bytes: 350_000,
             context_compaction_enabled: true,
             context_keep_recent_tool_results: 6,
@@ -771,10 +769,9 @@ impl Agent {
 
         // Scale the instruction-file cap with the model window rather than a fixed 64 KiB.
         let tool_names: Vec<&str> = specs.iter().map(|spec| spec.name.as_str()).collect();
-        let (system, _render) = crate::context::build_system_prompt_with_budget(
+        let system = crate::context::build_system_prompt_with_budget(
             &ctx,
             &tool_names,
-            self.config.memory_max_prompt_bytes_per_file,
             Some(base_context_threshold),
         );
         let schema_bytes = estimate_tool_schema_bytes(&specs);
@@ -822,11 +819,7 @@ impl Agent {
         let files = ctx
             .project_instructions
             .iter()
-            .map(|file| (shown_path(&ctx, &file.path), file.content.as_str()))
-            .chain([
-                ("MEMORY.md".to_string(), ctx.memory.memory.as_str()),
-                ("USER.md".to_string(), ctx.memory.user.as_str()),
-            ]);
+            .map(|file| (shown_path(&ctx, &file.path), file.content.as_str()));
         for (name, text) in files.filter(|(_, text)| !text.trim().is_empty()) {
             events.emit(EventPayload::ContextInjected {
                 label: format!("Loaded {name}"),

@@ -42,7 +42,6 @@ pub const MUTATING_TOOL_NAMES: &[&str] = &[
     "patch",
     "apply_patch",
     "todo_list",
-    "memory",
     "skill_manage",
     "browser_click",
     "browser_type",
@@ -106,7 +105,6 @@ const PROGRESS_RESET_TOOL_NAMES: &[&str] = &[
     "cronjob_manage",
     "todo",
     "todo_list",
-    "memory",
     "skill_manage",
 ];
 
@@ -952,19 +950,6 @@ pub fn classify_tool_failure(tool_name: &str, result: Option<&str>) -> (bool, St
             }
         }
         return (false, String::new());
-    }
-
-    if tool_name == "memory" {
-        let data = safe_json_loads(result);
-        if let Some(Value::Object(map)) = data.as_ref() {
-            if map.get("success") == Some(&Value::Bool(false)) {
-                if let Some(Value::String(error)) = map.get("error") {
-                    if error.contains("exceed the limit") {
-                        return (true, " [full]".to_string());
-                    }
-                }
-            }
-        }
     }
 
     let lower: String = result.chars().take(500).collect::<String>().to_lowercase();

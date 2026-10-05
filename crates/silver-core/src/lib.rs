@@ -1,5 +1,5 @@
-//! silver-core: the agent loop, tools, memory and detections. Providers are transport only, and
-//! the core must not depend on Axum, SQLite or adapter details.
+//! silver-core: the agent loop, tools and detections. Providers are transport only, and the
+//! core must not depend on Axum, SQLite or adapter details.
 
 pub mod advisor;
 pub mod agent;
@@ -7,8 +7,8 @@ pub mod context;
 pub mod dirs;
 pub mod error;
 pub mod event;
+pub mod hash;
 pub mod lsp;
-pub mod memory;
 pub mod model;
 pub mod model_metadata;
 pub mod plan;

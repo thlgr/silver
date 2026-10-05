@@ -390,15 +390,17 @@ impl McpManager {
     /// Connect every enabled [[mcp.server]] entry and return every discovered tool, ready to
     /// register. A server that fails to connect contributes no tools but is retained so a later
     /// call can reconnect it; failures are logged, never fatal to the other servers.
-    pub async fn connect_all(&self, config: &crate::config::Config) -> Vec<Arc<dyn Tool>> {
+    pub async fn connect_all(
+        &self,
+        config: &crate::config::Config,
+        extra: &[crate::config::McpServerConfig],
+    ) -> Vec<Arc<dyn Tool>> {
         let connections: Vec<Arc<McpServerConnection>> = config
             .enabled_mcp_servers()
             .into_iter()
-            .map(|server| {
-                Arc::new(McpServerConnection::new(
-                    crate::config::McpServerConfig::clone(server),
-                ))
-            })
+            .cloned()
+            .chain(extra.iter().cloned())
+            .map(|server| Arc::new(McpServerConnection::new(server)))
             .collect();
 
         let connects = connections.iter().map(|connection| async move {
