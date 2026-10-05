@@ -67,11 +67,13 @@ pub(super) async fn stop(hub: &Arc<ChatHub>, group: &BotRow) {
 
 async fn run(hub: &Arc<ChatHub>, group_id: &str, lane: &Lane, epoch: u64) -> CoreResult<()> {
     let mut replies = 0;
+    // Members whose turn failed: they sit out the rest of this one.
+    let mut out: Vec<String> = Vec::new();
     for round in 0..MAX_ROUNDS {
         let group = hub.bot(group_id).await?;
         let members = members(hub, &group).await?;
         let since = since_last_user_message(hub, lane).await?;
-        let mut speakers = responders(&members, &since);
+        let mut speakers = responders(&members, &out, &since);
         // Each round starts one member later, so the same bot does not always speak first.
         if !speakers.is_empty() {
             let shift = round % speakers.len();
@@ -92,10 +94,15 @@ async fn run(hub: &Arc<ChatHub>, group_id: &str, lane: &Lane, epoch: u64) -> Cor
                     reply,
                 },
             );
-            // A failed, stopped or overdue turn counts as a pass; a failure shows in the room.
-            if let Ok(Ok(Ok(Some(_)))) = tokio::time::timeout(TURN_TIMEOUT, answer).await {
-                spoke += 1;
-                replies += 1;
+            match tokio::time::timeout(TURN_TIMEOUT, answer).await {
+                Ok(Ok(Ok(Some(_)))) => {
+                    spoke += 1;
+                    replies += 1;
+                }
+                Ok(Ok(Ok(None))) => {}
+                // A failed, stopped or overdue turn sits the member out of the rest of this
+                // turn; a failure shows in the room.
+                _ => out.push(member.id.clone()),
             }
         }
         if spoke == 0 {
@@ -128,14 +135,19 @@ async fn since_last_user_message(hub: &ChatHub, lane: &Lane) -> CoreResult<Vec<C
 }
 
 /// Who answers: the members @-mentioned since the user's last message, or everyone when nobody
-/// (or `@all` / `@everyone`) is.
-fn responders<'a>(members: &'a [BotRow], messages: &[ChatEntry]) -> Vec<&'a BotRow> {
+/// (or `@all` / `@everyone`) is. Members in `out` never answer, so a mention of one that is
+/// stuck falls to the rest instead of stranding the room.
+fn responders<'a>(
+    members: &'a [BotRow],
+    out: &[String],
+    messages: &[ChatEntry],
+) -> Vec<&'a BotRow> {
+    let live = || members.iter().filter(|member| !out.contains(&member.id));
     let texts: Vec<&str> = messages.iter().map(|entry| entry.text.as_str()).collect();
     let everyone = texts
         .iter()
         .any(|text| mentions(text, "all") || mentions(text, "everyone"));
-    let named: Vec<&BotRow> = members
-        .iter()
+    let named: Vec<&BotRow> = live()
         .filter(|member| {
             texts.iter().any(|text| {
                 handles(&member.name)
@@ -145,7 +157,7 @@ fn responders<'a>(members: &'a [BotRow], messages: &[ChatEntry]) -> Vec<&'a BotR
         })
         .collect();
     if everyone || named.is_empty() {
-        members.iter().collect()
+        live().collect()
     } else {
         named
     }
@@ -321,11 +333,15 @@ mod tests {
         entry
     }
 
-    fn who(members: &[BotRow], text: &str) -> Vec<String> {
-        responders(members, &[said(text)])
+    fn who_is_left(members: &[BotRow], out: &[String], text: &str) -> Vec<String> {
+        responders(members, out, &[said(text)])
             .into_iter()
             .map(|member| member.id.clone())
             .collect()
+    }
+
+    fn who(members: &[BotRow], text: &str) -> Vec<String> {
+        who_is_left(members, &[], text)
     }
 
     #[test]
@@ -337,6 +353,15 @@ mod tests {
         assert_eq!(who(&members, "@尼采課幫我整理"), ["c"]);
         assert_eq!(who(&members, "@bobby?"), ["a", "b", "c"]);
         assert_eq!(who(&members, "@all go"), ["a", "b", "c"]);
+    }
+
+    #[test]
+    fn a_member_that_sat_out_is_not_asked_even_when_mentioned() {
+        let members = [bot("a", "Alice"), bot("b", "Bob"), bot("c", "Cara")];
+        let out = ["b".to_string()];
+        assert_eq!(who_is_left(&members, &out, "hi all"), ["a", "c"]);
+        assert_eq!(who_is_left(&members, &out, "@bob can you look"), ["a", "c"]);
+        assert_eq!(who_is_left(&members, &out, "@cara and @bob"), ["c"]);
     }
 
     #[test]

@@ -209,6 +209,21 @@ def scenarios():
     call("DELETE", f"/v1/chat/bots/{outside}")
     call("DELETE", f"/v1/chat/bots/{trusting}")
 
+    # A member whose turn fails, such as an agent at its usage limit, shows the failure once and sits
+    # out the rest of the turn; the others carry on.
+    broken = bot("Broken", provider="opencode", workspace_id=workspace)
+    room = bot("Room", kind="group", members=[broken, alice])
+    call("POST", f"/v1/chat/bots/{room}/send", {"text": "status please"})
+    failures = lambda: [e for e in entries(room) if e["kind"] == "notice" and e.get("style") == "error"]
+    until("the failure", failures)
+    until("alice carries on", lambda: any(e["author"] == alice for e in said(room)))
+    time.sleep(2)
+    assert len(failures()) == 1, "a failing member is asked once per turn"
+    assert "session limit" in failures()[0]["text"]
+    assert len([e for e in said(room) if e["author"] == alice]) == 1
+    call("DELETE", f"/v1/chat/bots/{room}")
+    call("DELETE", f"/v1/chat/bots/{broken}")
+
     # A bot asks another bot, and both chats say so; the answer is not a bubble in the asked chat.
     before = len(said(bob))
     call("POST", f"/v1/chat/bots/{alice}/send", {"text": "askbot bob"})

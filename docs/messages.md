@@ -59,6 +59,9 @@ turn*:
   then only the bots named. Typing `@` in the box suggests the members.
 - A bot with nothing to add replies `(pass)`, which says nothing; a round where nobody speaks ends
   the turn. A bot can @-mention another to bring it into the next round.
+- A bot whose turn fails (an agent that hit its usage limit, say) sits out the rest of that turn,
+  even when @-mentioned, so the others carry on. The failure shows in the group, and the bot is
+  asked again on your next message.
 - A newer message in the same chat, or Stop, ends a running room turn before its next speaker.
   Approval cards from a member appear in the group.
 
