@@ -38,10 +38,20 @@ Retire silver's Markdown memory and make ai-memory the memory of record.
 - The server's data directory lives under silver's own, so the store travels with an install.
   ai-memory resolves the project from each run's workspace, which is what makes every harness in
   one workspace share one memory.
-- External harnesses are pointed at the same server by ai-memory's own installers
-  (`ai-memory install-mcp --client claude-code --apply`, `install-hooks --agent claude-code
-  --apply`, …), run once per detected harness. silver does not reimplement a harness's memory
-  protocol.
+- External harnesses share the same server by the operator's own choice: running ai-memory's
+  installers (`ai-memory install-mcp --client claude-code --apply`, `install-hooks --agent
+  claude-code --apply`, …) points them at it. silver does not touch their configs; it does not
+  reimplement a harness's memory protocol either.
+- A run on a native provider has no harness hooks, so silver is its **lifecycle producer**: it
+  posts the run's start, prompt, tool calls and end to ai-memory's `/hook/batch`
+  (`MemoryHooks`, `apps/silver/src/ai_memory.rs`), tagged `extension=silver` and scoped to the
+  workspace's `(workspace, project)`. One session can span several idle periods: after a quiet
+  `session-end` ai-memory keeps the session's observations and rewrites its summary on the next
+  end, so a later run needs no new start. A session ends in ai-memory once it has had no run for
+  ten minutes, or at shutdown, which is when ai-memory writes its summary page and handoff. An ACP
+  agent keeps its own hooks and is not captured here, so nothing is stored twice; a run with no
+  workspace has no project and is not captured. A tool call made inside a subagent reaches the run
+  as `subagent.step` and is not captured; only the run's own calls are.
 - silver's `memory` tool, its `MEMORY.md`/`USER.md` store, the prompt's memory blocks and the
   `[memory] max_prompt_bytes_per_file` cap are removed. A workspace with no reaching server has no
   memory, rather than a second, invisible one.
@@ -56,7 +66,14 @@ Retire silver's Markdown memory and make ai-memory the memory of record.
 - A second process. This is a deliberate exception to "one binary": ai-memory is a server with its
   own store and schema, and vendoring it into silver would add its crates, a git backend and a
   SQLite database to silver's build. The managed-server boundary keeps silver small.
-- Capture becomes automatic through ai-memory's hooks, retrieval becomes `memory_query` and
-  `memory_briefing`, and consolidation is opt-in. silver stops growing memory itself.
+- Capture becomes automatic through ai-memory's hooks (and silver's own for native runs),
+  retrieval becomes `memory_query` and `memory_briefing`, and consolidation is opt-in. silver stops
+  growing memory itself.
+- ai-memory keeps a tool call's content only for the harnesses it has a verified payload shape
+  for; silver is not one, so a native run's tool calls are stored as counts, not content (the
+  posted body carries the redacted argument preview and the result summary, ready for the day
+  silver has a shape upstream). Delivery is best-effort without holding up a run: a batch the
+  server does not take is retried once, then logged and dropped, and a burst of tool calls cannot
+  evict a lifecycle event because the queue keeps a reserve for it.
 - Memory no longer sits in the run's system prompt; it arrives through a tool call, so prompts
   shrink and the `memory.changed` event goes away.

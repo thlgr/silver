@@ -199,7 +199,7 @@ wall-clock limit, and the turn sends a `run.waiting` notice after 60 s.
 | Section | Default | What it does |
 | --- | --- | --- |
 | `[auxiliary]` | off | A side model (`enabled`, `model`, `provider`, `base_url`, `api_key_env`) for summaries, session titles and `smart` approvals. |
-| `[memory]` | on | The managed ai-memory server, the shared memory across harnesses: `enabled`, `binary` (default `ai-memory` on `PATH`), `bind` (`127.0.0.1:49374`), `data_dir` (default `<data_dir>/ai-memory`), `install_harnesses` (wire installed Claude Code / OpenCode / Gemini / Cursor to the server). |
+| `[memory]` | on | The managed ai-memory server, the shared memory across harnesses: `enabled`, `binary` (default `ai-memory` on `PATH`), `bind` (`127.0.0.1:49374`), `data_dir` (default `<data_dir>/ai-memory`). silver does not wire other harnesses; run `ai-memory install-mcp` and `install-hooks` yourself to give them the same memory. |
 | `[delegation]` | on | Subagent limits, see [tools.md](tools.md#subagents). |
 | `[moa]` | off | Mixture of Agents, see [provider-setup.md](provider-setup.md#mixture-of-agents). |
 | `[checkpoints]` | on | `max_snapshots = 50`, `max_bytes = 64 MiB`. |

@@ -144,6 +144,11 @@ async fn main() -> anyhow::Result<()> {
         frozen_yolo,
         config_path,
         &auth,
+    )
+    .with_memory(
+        ai_memory
+            .as_ref()
+            .map(|memory| silver::ai_memory::MemoryHooks::clone(memory.hooks())),
     );
     // The emergency stop is persistent: a sentinel left behind by an earlier process holds
     // new runs from the moment the daemon starts.
