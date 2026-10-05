@@ -280,9 +280,21 @@ pub(crate) fn extract_text(path: &Path, bytes: &[u8]) -> Option<String> {
     {
         return None;
     }
+    extract_pdf(bytes)
+}
+
+/// PDF text via pdf-extract; None without the `pdf` feature, so a PDF stays as unreadable as
+/// any other binary blob in a fast `--no-default-features` build.
+#[cfg(feature = "pdf")]
+fn extract_pdf(bytes: &[u8]) -> Option<String> {
     pdf_extract::extract_text_from_mem(bytes)
         .ok()
         .filter(|text| !text.trim().is_empty())
+}
+
+#[cfg(not(feature = "pdf"))]
+fn extract_pdf(_bytes: &[u8]) -> Option<String> {
+    None
 }
 
 /// Extensions treated as ordinary source code, where the assignment/YAML passes would rewrite

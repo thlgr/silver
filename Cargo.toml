@@ -14,3 +14,9 @@ rust-version = "1.88"
 
 [profile.release]
 lto = "thin"
+
+# No debuginfo in dev: nothing here uses a debugger, and it dominates codegen,
+# link time and target size. Re-add `debug = "line-tables-only"` (or a
+# `debugging` profile) if that changes.
+[profile.dev]
+debug = false

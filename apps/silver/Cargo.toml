@@ -13,7 +13,7 @@ name = "silver"
 path = "src/main.rs"
 
 [dependencies]
-silver-core = { path = "../../crates/silver-core" }
+silver-core = { path = "../../crates/silver-core", default-features = false }
 silver-protocol = { path = "../../crates/silver-protocol" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -42,3 +42,9 @@ ring = "0.17"
 sha2 = "0.10"
 base64 = "0.22"
 rust-embed = { version = "8.12.0", features = ["mime-guess"] }
+
+[features]
+# PDF text extraction, on by default. `--no-default-features` drops the whole
+# pdf-extract stack for a faster dev/CI loop; a PDF then reads as binary.
+default = ["pdf"]
+pdf = ["silver-core/pdf"]
