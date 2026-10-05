@@ -118,5 +118,7 @@ by hand (Actions → Release → Run workflow) to check every build without publ
 - `scripts/tools_e2e.sh` drives real tool calls (`bash`, `todo_list`, `write_file`) through
   `scripts/mock_openai_server.py`, an offline OpenAI-compatible server (`python3
   scripts/mock_openai_server.py <port>`).
+- `scripts/ai_memory_e2e.py` drives a native run against a stub ai-memory server: the run's
+  lifecycle reaches `/hook/batch` and the project handoff lands in the system prompt.
 - `scripts/release_notes.sh TAG DIST_DIR` prints the release notes (needs `GITHUB_REPOSITORY`).
 - `scripts/slop.py` flags new AI slop (clones, unwraps, `#[allow]`, filler comments); see AGENTS.md.

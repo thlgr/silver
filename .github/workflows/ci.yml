@@ -143,3 +143,6 @@ jobs:
 
       - name: Run bot chat e2e
         run: python3 scripts/chat_e2e.py
+
+      - name: Run ai-memory capture e2e
+        run: python3 scripts/ai_memory_e2e.py
