@@ -11,7 +11,7 @@ use axum::{
 use serde::Deserialize;
 use serde_json::{json, Value};
 use silver_core::error::CoreError;
-use silver_protocol::providers::PROVIDER_PRESETS;
+use silver_protocol::providers::{ProviderKind, PROVIDER_PRESETS};
 use std::borrow::Cow;
 use std::sync::Arc;
 
@@ -266,7 +266,7 @@ async fn catalog_models(state: &AppState, route: &crate::routed::Route) -> Vec<S
         return Vec::new();
     };
     let (key, base_url) = match route.kind {
-        silver_protocol::providers::ProviderKind::Copilot => {
+        ProviderKind::Copilot => {
             crate::copilot::CopilotProvider::new(
                 String::clone(&route.base_url),
                 route.key().to_string(),
@@ -361,6 +361,7 @@ pub async fn models(
 ) -> Result<Json<Value>, ApiFailure> {
     let store = store(&state)?;
     let routes = routes(&state)?;
+    let named = query.provider.is_some();
     let provider = query
         .provider
         .map(|provider| provider.trim().to_ascii_lowercase())
@@ -382,10 +383,17 @@ pub async fn models(
     }
     let route = routes.resolve(&provider).await?;
     let authenticated = route.authenticated();
-    let models = if authenticated {
-        catalog_models(&state, &route).await
-    } else {
-        Vec::new()
+    let models = match route.kind {
+        _ if !authenticated => Vec::new(),
+        // Listing starts the agent, which the page load, naming no provider, does not wait for.
+        ProviderKind::Acp if !named => Vec::new(),
+        ProviderKind::Acp => crate::acp::list_models(&route.base_url)
+            .await
+            .unwrap_or_else(|error| {
+                tracing::debug!(provider, %error, "could not list the agent's models");
+                Vec::new()
+            }),
+        _ => catalog_models(&state, &route).await,
     };
     let details = local_details(&state, &route).await;
     // The model a run will name, as create_run resolves it: a local server's placeholder

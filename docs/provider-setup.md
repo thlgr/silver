@@ -69,8 +69,10 @@ the `llamacpp` preset works against a stock server.
 **`copilot-acp` runs its own loop.** silver's tools are not offered to the external agent, its tool
 calls never reach silver's approval gate, and only its prose comes back (its thinking and tool
 activity show as reasoning). One ACP session is kept per silver session, so after the first turn
-only the newest message is sent. A model written `provider/model` is selected through the agent's
-own `model` option.
+only the newest message is sent. A model other than the agent's own name is selected through the
+agent's `model` option, and a session keeps the model it started with, so changing it starts a new
+session. The agents list their models themselves: silver starts one to ask (a few seconds, then
+remembered until restart) when the editor or picker opens its list.
 
 All transports share one TLS policy (`[security]`), redact the key from error bodies and truncate
 them, and never echo a 401/403 body.

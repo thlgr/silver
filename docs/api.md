@@ -65,7 +65,7 @@ and key. One run per session at a time: a second returns `session_busy`.
 | GET | `/v1/approvals` | `{mode, frozen}`: the effective approval mode, and whether `--yolo` pinned it |
 | POST | `/v1/approvals` | Persist a new global `{mode: "manual"\|"smart"\|"off"}`; refused while pinned |
 | GET, POST | `/v1/advisor` | Jev hints: read `{enabled, has_key, questions}`; switch with `{enabled}` (saved as `agent.jev_hints`) |
-| GET | `/v1/models?provider=` | The models the endpoint advertises (`{provider, default, authenticated, models}`); empty when it has no catalog |
+| GET | `/v1/models?provider=` | The models the endpoint advertises (`{provider, default, authenticated, models}`); empty when it has no catalog. For an [agent mode](provider-setup.md#external-agent-modes-acp) they are the agent's own, read by starting it, and only when `provider` is named |
 | GET | `/v1/auth` | Every provider with its endpoint, model, whether a run could authenticate, where the credential comes from (`stored`, `oauth`, `env`, `none`), `configured`, and `installed` for an [agent mode](provider-setup.md#external-agent-modes-acp) (its CLI can be launched here; `null` for any other preset) |
 | POST | `/v1/auth/{provider}` | Store `{api_key?, base_url?, model?, activate?}`; the key is never echoed |
 | POST | `/v1/auth/{provider}/activate` | Route new runs through a signed-in provider; 400 if not signed in |

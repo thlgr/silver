@@ -386,15 +386,16 @@ pub struct AcpProvider {
     cwd: Option<String>,
     model: String,
     connection: Mutex<Option<Arc<Connection>>>,
-    sessions: Mutex<HashMap<String, String>>,
+    /// Each conversation's ACP session and the model it was opened with.
+    sessions: Mutex<HashMap<String, (String, String)>>,
 }
 
-/// The `provider/model` value for the agent's `model` config option; a bare label such as the
-/// default `copilot` names none, so the agent keeps its own default.
+/// The value for the agent's `model` config option. The agent mode's own name (`claude`,
+/// `copilot`), which is what a run carries when nobody picked a model, names none, so the agent
+/// keeps its own default.
 fn model_option_value(name: &str) -> Option<&str> {
     let name = name.trim();
-    let (provider, model) = name.split_once('/')?;
-    (!provider.is_empty() && !model.is_empty()).then_some(name)
+    (!name.is_empty() && crate::agent_modes::mode(name).is_none()).then_some(name)
 }
 
 impl AcpProvider {
@@ -486,32 +487,25 @@ impl AcpProvider {
     }
 
     /// The ACP session for a conversation and whether this call opened it: a fresh session needs
-    /// the whole conversation, an existing one only the newest turn.
+    /// the whole conversation, an existing one only the newest turn. A session keeps the model it
+    /// started with, so another model opens a new one.
     async fn session(
         &self,
         connection: &Arc<Connection>,
         key: &str,
+        model: &str,
         workspace: Option<&std::path::Path>,
     ) -> Result<(String, bool), CoreError> {
-        if let Some(session) = self.sessions.lock().await.get(key) {
+        if let Some((session, _)) = self
+            .sessions
+            .lock()
+            .await
+            .get(key)
+            .filter(|(_, opened_with)| opened_with == model)
+        {
             return Ok((String::clone(session), false));
         }
-        // The agent works where the run does: a session never changes workspace.
-        let cwd = workspace
-            .map(|path| path.display().to_string())
-            .or_else(|| Option::clone(&self.cwd))
-            .or_else(|| {
-                std::env::current_dir()
-                    .ok()
-                    .map(|path| path.display().to_string())
-            })
-            .unwrap_or_else(|| ".".to_string());
-        let response = connection
-            .request("session/new", json!({ "cwd": cwd, "mcpServers": [] }))
-            .await
-            .map_err(|error| {
-                CoreError::ProviderUnavailable(format!("ACP session/new failed: {error}"))
-            })?;
+        let response = self.new_session(connection, workspace).await?;
         let session_id = response
             .get("sessionId")
             .and_then(Value::as_str)
@@ -519,7 +513,7 @@ impl AcpProvider {
                 CoreError::ProviderUnavailable("ACP session/new returned no session".to_string())
             })?
             .to_string();
-        if let Some(model) = model_option_value(&self.model) {
+        if let Some(model) = model_option_value(model) {
             connection
                 .request(
                     "session/set_config_option",
@@ -532,12 +526,93 @@ impl AcpProvider {
                     ))
                 })?;
         }
-        self.sessions
-            .lock()
-            .await
-            .insert(key.to_string(), String::clone(&session_id));
+        self.sessions.lock().await.insert(
+            key.to_string(),
+            (String::clone(&session_id), model.to_string()),
+        );
         Ok((session_id, true))
     }
+
+    /// Open a session and return the agent's answer: its id and the options it offers.
+    async fn new_session(
+        &self,
+        connection: &Arc<Connection>,
+        workspace: Option<&std::path::Path>,
+    ) -> Result<Value, CoreError> {
+        // The agent works where the run does: a session never changes workspace.
+        let cwd = workspace
+            .map(|path| path.display().to_string())
+            .or_else(|| Option::clone(&self.cwd))
+            .or_else(|| {
+                std::env::current_dir()
+                    .ok()
+                    .map(|path| path.display().to_string())
+            })
+            .unwrap_or_else(|| ".".to_string());
+        connection
+            .request("session/new", json!({ "cwd": cwd, "mcpServers": [] }))
+            .await
+            .map_err(|error| {
+                CoreError::ProviderUnavailable(format!("ACP session/new failed: {error}"))
+            })
+    }
+}
+
+/// How long an agent gets to start and open a session when asked for its models.
+const LIST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
+
+/// What each agent command offered the last time it was asked, so the editor does not start the
+/// agent on every open.
+static OFFERED: std::sync::LazyLock<std::sync::Mutex<HashMap<String, Vec<String>>>> =
+    std::sync::LazyLock::new(Default::default);
+
+/// The models an agent offers, read from the `model` option of a session it opens (about two
+/// seconds). Only an answer with models is kept.
+pub async fn list_models(command: &str) -> Result<Vec<String>, CoreError> {
+    let kept = OFFERED
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .get(command)
+        .cloned();
+    if let Some(models) = kept {
+        return Ok(models);
+    }
+    let agent = AcpProvider::new(command, "");
+    let asked = tokio::time::timeout(LIST_TIMEOUT, async {
+        let connection = agent.connection().await?;
+        agent.new_session(&connection, None).await
+    })
+    .await;
+    // The read loop keeps the connection alive, so the agent exits only once its stdin is dropped.
+    if let Some(connection) = agent.connection.lock().await.take() {
+        *connection.writer.lock().await = Box::new(tokio::io::sink());
+    }
+    let models = offered_models(&asked.map_err(|_elapsed| {
+        CoreError::ProviderUnavailable("the ACP agent did not answer in time".to_string())
+    })??);
+    if !models.is_empty() {
+        OFFERED
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .insert(command.to_string(), Vec::clone(&models));
+    }
+    Ok(models)
+}
+
+/// The values of the `model` option in a `session/new` answer.
+fn offered_models(response: &Value) -> Vec<String> {
+    response
+        .get("configOptions")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .find(|option| option.get("id").and_then(Value::as_str) == Some("model"))
+        .and_then(|option| option.get("options").and_then(Value::as_array))
+        .into_iter()
+        .flatten()
+        .filter_map(|option| option.get("value").and_then(Value::as_str))
+        .map(str::to_string)
+        .collect()
 }
 
 /// The prompt for a turn: the whole conversation for a fresh session, else the newest user message.
@@ -602,8 +677,13 @@ impl Model for AcpProvider {
             .cache_key
             .take()
             .unwrap_or_else(|| uuid::Uuid::now_v7().to_string());
+        let model = if request.model.is_empty() {
+            &self.model
+        } else {
+            &request.model
+        };
         let (session_id, fresh) = self
-            .session(&connection, &key, request.workspace.as_deref())
+            .session(&connection, &key, model, request.workspace.as_deref())
             .await?;
         let text = prompt_text(&request, fresh);
 
@@ -917,6 +997,41 @@ mod tests {
             events[5],
             ModelStreamEvent::Finish(FinishReason::Stop)
         ));
+    }
+
+    #[test]
+    fn the_models_an_agent_offers_come_from_its_model_option() {
+        let answer = json!({
+            "sessionId": "s",
+            "configOptions": [
+                { "id": "mode", "options": [{ "value": "plan", "name": "Plan" }] },
+                { "id": "model", "options": [
+                    { "value": "opus", "name": "Opus" },
+                    { "value": "deepseek/flash", "name": "Flash" },
+                ] },
+            ],
+        });
+        assert_eq!(offered_models(&answer), ["opus", "deepseek/flash"]);
+        assert!(offered_models(&json!({ "sessionId": "s" })).is_empty());
+    }
+
+    #[test]
+    fn only_a_model_the_user_picked_is_asked_of_the_agent() {
+        assert_eq!(model_option_value(" opus "), Some("opus"));
+        assert_eq!(model_option_value("deepseek/flash"), Some("deepseek/flash"));
+        assert_eq!(model_option_value(""), None);
+        // A run with no model of its own carries the agent mode's name.
+        for preset in silver_protocol::providers::PROVIDER_PRESETS
+            .iter()
+            .filter(|preset| preset.kind == silver_protocol::providers::ProviderKind::Acp)
+        {
+            assert_eq!(
+                model_option_value(preset.default_model),
+                None,
+                "{}",
+                preset.id
+            );
+        }
     }
 
     #[tokio::test]
