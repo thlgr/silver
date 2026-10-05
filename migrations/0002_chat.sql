@@ -29,7 +29,6 @@ CREATE TABLE chat_entries (
     kind TEXT NOT NULL,             -- 'user', 'agent', 'notice' or 'permission'
     author TEXT,
     text TEXT NOT NULL DEFAULT '',
-    final INTEGER NOT NULL DEFAULT 1,
     status TEXT,
     style TEXT,
     run_id TEXT,

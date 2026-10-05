@@ -112,7 +112,7 @@
       </span>
     {/if}
     <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
-    <div class="bubble agent prose" class:live={!entry.final} oncontextmenu={open} onpointerdown={press} onpointerup={release} onpointercancel={release} onpointermove={release} onclick={copyCode}>{@html markdown(entry.text)}</div>
+    <div class="bubble agent prose" oncontextmenu={open} onpointerdown={press} onpointerup={release} onpointercancel={release} onpointermove={release} onclick={copyCode}>{@html markdown(entry.text)}</div>
     <div class="foot">
       {#if entry.limits?.length && !(group && start)}<LimitBar windows={entry.limits} up />{/if}
       <span class="time">{stamp}</span>{@render actions()}

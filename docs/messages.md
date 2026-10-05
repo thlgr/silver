@@ -134,8 +134,8 @@ theme.
 
 Bots, chat entries and read marks live in `state.db` (`bots`, `chat_entries`, `chat_reads`,
 migration `0002_chat.sql`); the sessions behind them are ordinary rows. Chat entries are the chat
-view only: deleting a bot deletes its entries and its sessions. After a restart half-written
-replies are finished as they stood and unanswered cards expire. The HTTP routes, and the stream
+view only: deleting a bot deletes its entries and its sessions. After a restart unanswered cards
+expire and messages still queued behind a turn are cancelled. The HTTP routes, and the stream
 that keeps a window current, are in [api.md](api.md#bot-chat).
 
 ## Other coding agents

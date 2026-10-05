@@ -1,6 +1,6 @@
 // A bot's face: an even grid of dots shaded as if its silhouette were a ball, with two hollow
 // eyes (missing dots). While the bot works the eyes glance side to side and blink now and then;
-// when it needs the user a ripple runs across it. Ported from Codync's CharacterAvatar.
+// when it needs the user a ripple runs across it.
 
 export const COLORS = [
   { id: 'black', label: 'Black', hex: '#2b2b2b' },

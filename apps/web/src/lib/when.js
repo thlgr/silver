@@ -1,4 +1,4 @@
-// Times the way Codync shows them in a chat and in its roster.
+// Date and time labels for a chat and its roster.
 
 const clock = (date) => date.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
 const sameDay = (a, b) => a.toDateString() === b.toDateString()

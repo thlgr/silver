@@ -764,6 +764,7 @@ pub struct WorkspaceView {
 pub struct MemoryPageView {
     pub path: String,
     pub title: String,
+    #[serde(default = "default_memory_kind")]
     pub kind: String,
     #[serde(default)]
     pub updated_at: Option<String>,
@@ -783,8 +784,15 @@ pub struct MemoryView {
 pub struct MemoryPageBody {
     pub path: String,
     pub title: String,
+    #[serde(default = "default_memory_kind")]
     pub kind: String,
+    #[serde(default)]
     pub body_markdown: String,
+}
+
+/// The kind ai-memory falls back to when a page omits one.
+fn default_memory_kind() -> String {
+    "fact".to_string()
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
