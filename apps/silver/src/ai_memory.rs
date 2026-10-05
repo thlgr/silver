@@ -1,7 +1,6 @@
 //! The managed ai-memory server, the shared cross-harness memory of record: silver starts it (or
-//! adopts one already listening), registers it over MCP, records its own runs into it and hands a
-//! new session the project's pending handoff ([`MemoryHooks`]) and stops it on shutdown
-//! (docs/adr/0002-shared-memory-via-ai-memory.md).
+//! adopts one already listening), registers it over MCP, records its own runs and the handoff a
+//! new session claims, and stops it on shutdown (docs/adr/0002-shared-memory-via-ai-memory.md).
 
 use crate::config::{Config, McpServerConfig, McpTransport};
 use crate::mcp::truncate_head_tail;

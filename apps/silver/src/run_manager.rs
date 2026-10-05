@@ -1634,9 +1634,8 @@ impl RunManager {
         })
     }
 
-    /// Start reporting the run to ai-memory: its prompt, as the first of its session when
-    /// `new_session`, which also puts the project's pending handoff into the run's context. Only a
-    /// workspace run on a native provider is reported; an ACP agent has its own hooks, and
+    /// Start reporting the run to ai-memory: its prompt, and the handoff the session claims. Only
+    /// a workspace run on a native provider is reported; an ACP agent has its own hooks, and
     /// capturing it here too would store every event twice.
     async fn open_capture(
         &self,
