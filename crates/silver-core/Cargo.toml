@@ -22,7 +22,12 @@ tracing = "0.1"
 # search_files: small models write regex ("a|b", "free.tier", "import.*lite") into patterns.
 regex = "1"
 # read_file and search_documents extract a PDF's text; pure Rust, so no poppler is needed.
-pdf-extract = "0.12"
+# Optional so `--no-default-features` drops the ~67-crate stack for a fast dev/CI loop.
+pdf-extract = { version = "0.12", optional = true }
+
+[features]
+default = ["pdf"]
+pdf = ["dep:pdf-extract"]
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
