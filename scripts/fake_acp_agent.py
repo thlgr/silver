@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """A stand-in ACP agent for chat_e2e.py. It answers "ok", and before a prompt that says "write" it
-asks leave to write a file, then reports what it was told: "allowed:<option>" or "refused:<option>"."""
+asks leave to write a file, then reports what it was told: "allowed:<option>" or "refused:<option>".
+In a group chat room, "Broken" fails with a usage-limit error, as Claude Code does once its session
+limit is hit."""
 import json
 import os
 import sys
@@ -33,7 +35,8 @@ for line in sys.stdin:
         sid = msg["params"]["sessionId"]
         text = msg["params"]["prompt"][0]["text"]
         reply = f"ok in {sessions[sid]}"
-        if "write" in text:
+        broken = "You are Broken," in text
+        if "write" in text and not broken:
             send({
                 "jsonrpc": "2.0", "id": 900, "method": "session/request_permission",
                 "params": {
@@ -52,6 +55,9 @@ for line in sys.stdin:
             reply = ("allowed:" if chosen in ("yes", "always") else "refused:") + chosen
         send({"jsonrpc": "2.0", "method": "session/update", "params": {"sessionId": sid, "update": {
             "sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": reply}}}})
+        if broken:
+            send({"jsonrpc": "2.0", "id": mid, "error": {"code": -32603, "message": "Internal error: You've hit your session limit · resets 8:20pm"}})
+            continue
         send({"jsonrpc": "2.0", "id": mid, "result": {"stopReason": "end_turn"}})
     elif method == "session/cancel":
         pass

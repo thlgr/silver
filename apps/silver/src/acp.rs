@@ -649,7 +649,10 @@ impl Turn {
                     None => std::future::pending().await,
                 }
             };
+            // Biased: the queue closes just before the answer is sent, and a failed prompt must
+            // not be read as a finished one.
             tokio::select! {
+                biased;
                 () = self.cancel.cancelled() => {
                     self.finished = true;
                     // Tell the agent too, or it carries on with a turn nobody wants.
@@ -660,6 +663,15 @@ impl Turn {
                         "provider stream cancelled".to_string(),
                     )));
                 }
+                outcome = answered => match outcome {
+                    Some(Err(error)) => {
+                        self.finished = true;
+                        return Some(Err(CoreError::ProviderUnavailable(format!(
+                            "ACP prompt failed: {error}"
+                        ))));
+                    }
+                    Some(Ok(_)) | None => self.answer = None,
+                },
                 update = self.updates.recv() => {
                     let event = match update {
                         Some(AcpUpdate::Message(text)) => ModelStreamEvent::TextDelta(text),
@@ -673,15 +685,6 @@ impl Turn {
                     };
                     return Some(Ok(event));
                 }
-                outcome = answered => match outcome {
-                    Some(Err(error)) => {
-                        self.finished = true;
-                        return Some(Err(CoreError::ProviderUnavailable(format!(
-                            "ACP prompt failed: {error}"
-                        ))));
-                    }
-                    Some(Ok(_)) | None => self.answer = None,
-                },
             }
         }
     }
@@ -770,6 +773,27 @@ mod tests {
         // With nobody to ask the agent is refused, and told which request it was.
         assert_eq!(picked(None).await, "no");
         assert_eq!(permission_reply(None).await["id"], 7);
+    }
+
+    #[tokio::test]
+    async fn a_failed_prompt_is_never_taken_for_a_finished_one() {
+        // The queue is closed and the failure is waiting: both are ready, and either order used
+        // to be possible.
+        for _ in 0..64 {
+            let (sender, updates) = mpsc::unbounded_channel();
+            drop(sender);
+            let (done, answer) = mpsc::unbounded_channel();
+            done.send(Err("limit hit".to_string())).unwrap();
+            let mut turn = Turn {
+                updates,
+                answer: Some(answer),
+                cancel: CancellationToken::new(),
+                connection: Connection::new(tokio::io::empty(), tokio::io::sink(), None),
+                session: "a".into(),
+                finished: false,
+            };
+            assert!(matches!(turn.next().await, Some(Err(_))));
+        }
     }
 
     #[tokio::test]
