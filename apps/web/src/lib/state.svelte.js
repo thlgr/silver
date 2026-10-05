@@ -168,6 +168,21 @@ export async function loadProviders() {
 
 export const listModels = (provider) => api('/v1/models', { query: { provider } })
 
+/** Every reasoning-effort level the daemon accepts, weakest to strongest. A model offers some of
+ *  them: `listModels(...).efforts[model]`. */
+export const EFFORTS = [
+  { value: 'none', label: 'None' },
+  { value: 'minimal', label: 'Minimal' },
+  { value: 'low', label: 'Low' },
+  { value: 'medium', label: 'Medium' },
+  { value: 'high', label: 'High' },
+  { value: 'xhigh', label: 'X-High' },
+  { value: 'max', label: 'Max' },
+  { value: 'ultra', label: 'Ultra' },
+]
+/** What a model that lists none is assumed to take. */
+export const DEFAULT_EFFORTS = ['none', 'minimal', 'low', 'medium', 'high']
+
 /** The subagents this workspace can delegate to. A project file needs a workspace, so the
  *  listing is scoped like the rest of the panel. */
 export async function loadAgents() {
@@ -488,6 +503,24 @@ export async function storeAttachment(workspace, file) {
   return { ...stored, preview: file.type.startsWith('image/') ? `data:${file.type};base64,${data}` : null }
 }
 
+/** During a drag the browser hides the files, so the `Files` type is the only honest test:
+ *  answering true for dragged text would swallow a drop the textarea should handle itself. */
+export const isFileDrag = (e) => [...(e.dataTransfer?.types ?? [])].includes('Files')
+
+/** Store each file into a workspace's `.silver/attachments`; one that fails reports itself and is
+ * left out of the returned list. */
+export async function storeAll(workspace, files) {
+  const stored = []
+  for (const file of files) {
+    try {
+      stored.push(await storeAttachment(workspace, file))
+    } catch (e) {
+      notify(e.message, true)
+    }
+  }
+  return stored
+}
+
 /** Store files the user attached. Uploading on attach rather than on send is what makes a bad
  * file fail next to the chip, not after a long run. A workspace-less chat has nowhere to put a
  * file, so it says so. */
@@ -495,14 +528,10 @@ export async function attachFiles(files) {
   const workspace = app.session ? app.session.workspace_id : app.scope
   if (!workspace) return notify('Pick a workspace before attaching a file', true)
   app.notice = null
-  for (const file of files) {
-    try {
-      app.attachments.push(await storeAttachment(workspace, file))
-      // A later file that lands clears the error an earlier one left.
-      app.notice = null
-    } catch (e) {
-      notify(e.message, true)
-    }
+  for (const file of await storeAll(workspace, files)) {
+    app.attachments.push(file)
+    // A later file that lands clears the error an earlier one left.
+    app.notice = null
   }
 }
 

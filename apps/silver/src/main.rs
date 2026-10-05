@@ -55,9 +55,6 @@ struct Args {
 async fn main() -> anyhow::Result<()> {
     let args = Args::parse();
     let (config, config_path, data_dir, frozen_yolo) = load_config(args)?;
-    // Mode CLIs (opencode, grok, ...) come from the login shell's PATH, which a GUI-launched
-    // process does not have; hydrate once so resolving an ACP mode never stalls a request.
-    silver::agent_modes::hydrate_path();
 
     // Opt-in monitoring: off unless [monitoring] enabled with an endpoint. The emitter is a
     // global so producers and the run watcher can reach it without a threaded handle.
@@ -239,7 +236,9 @@ fn build_agent(
                 Arc::clone(context_resolver) as Arc<dyn silver_core::model::ContextLengthResolver>
             )
             .with_toolsets(toolsets)
-            .with_tool_names(&config.tools.enabled, &config.tools.disabled),
+            .with_tool_names(&config.tools.enabled, &config.tools.disabled)
+            // Only a bot in the chat has a team to ask; a chat run lifts these again.
+            .without_tools(&silver_core::tools::team::TEAM_TOOLS),
     );
     (agent, skills, advisor)
 }
@@ -386,7 +385,6 @@ struct Endpoint {
 impl Endpoint {
     fn transport(&self, key: &str) -> Arc<dyn Model> {
         build_transport(self.kind, &self.base_url, key, &self.model_name, &self.http)
-            .expect("the configured endpoint always resolves a base URL")
     }
 }
 
@@ -492,8 +490,7 @@ fn build_fallback_chain(
             fallback_key.as_deref().unwrap_or_default(),
             fallback_model,
             &endpoint.http,
-        )
-        .expect("a fallback route always resolves a base URL");
+        );
         chain.push(provider);
     }
     if chain.len() > 1 {
@@ -526,16 +523,13 @@ fn build_aux_model(config: &Config, endpoint: &Endpoint) -> Option<Arc<dyn Model
         );
         return None;
     }
-    Some(
-        build_transport(
-            aux_kind,
-            aux_base_url,
-            aux_key.as_deref().unwrap_or_default(),
-            aux_model_name,
-            &endpoint.http,
-        )
-        .expect("the auxiliary route always resolves a base URL"),
-    )
+    Some(build_transport(
+        aux_kind,
+        aux_base_url,
+        aux_key.as_deref().unwrap_or_default(),
+        aux_model_name,
+        &endpoint.http,
+    ))
 }
 
 /// Connect MCP servers and assemble the tool registry the agent shares. `ai_memory` is the

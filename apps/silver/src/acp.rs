@@ -38,17 +38,17 @@ pub struct PermissionRequest {
 /// Whoever can put a permission request to the user, and hear what an agent says of its plan's
 /// usage. Without one every request is refused and the usage goes unheard.
 #[async_trait]
-pub trait PermissionBroker: Send + Sync {
+pub trait AcpBroker: Send + Sync {
     async fn decide(&self, request: PermissionRequest) -> ApprovalDecision;
 
     /// The Claude adapter's rate-limit info, which comes with each turn's usage.
     async fn rate_limit(&self, _info: Value) {}
 }
 
-static BROKER: OnceLock<Arc<dyn PermissionBroker>> = OnceLock::new();
+static BROKER: OnceLock<Arc<dyn AcpBroker>> = OnceLock::new();
 
 /// Name who answers agents' permission requests, before any agent starts. The first call wins.
-pub fn set_broker(broker: Arc<dyn PermissionBroker>) {
+pub fn set_broker(broker: Arc<dyn AcpBroker>) {
     drop(BROKER.set(broker));
 }
 
@@ -128,13 +128,13 @@ struct Connection {
     updates: std::sync::Mutex<HashMap<String, mpsc::UnboundedSender<AcpUpdate>>>,
     /// The silver session key each routed ACP session works for.
     keys: std::sync::Mutex<HashMap<String, String>>,
-    broker: Option<Arc<dyn PermissionBroker>>,
+    broker: Option<Arc<dyn AcpBroker>>,
     next_id: std::sync::atomic::AtomicU64,
 }
 
 impl Connection {
     /// Wire a reader and writer into a connection, spawning the read loop.
-    fn new<R, W>(reader: R, writer: W, broker: Option<Arc<dyn PermissionBroker>>) -> Arc<Self>
+    fn new<R, W>(reader: R, writer: W, broker: Option<Arc<dyn AcpBroker>>) -> Arc<Self>
     where
         R: tokio::io::AsyncRead + Send + Unpin + 'static,
         W: AsyncWrite + Send + Unpin + 'static,
@@ -755,7 +755,7 @@ mod tests {
     struct Answer(ApprovalDecision);
 
     #[async_trait]
-    impl PermissionBroker for Answer {
+    impl AcpBroker for Answer {
         async fn decide(&self, request: PermissionRequest) -> ApprovalDecision {
             assert_eq!(
                 (request.session.as_str(), request.kind.as_str()),
@@ -769,7 +769,7 @@ mod tests {
     struct Hears(mpsc::UnboundedSender<Value>);
 
     #[async_trait]
-    impl PermissionBroker for Hears {
+    impl AcpBroker for Hears {
         async fn decide(&self, _request: PermissionRequest) -> ApprovalDecision {
             ApprovalDecision::Deny
         }
@@ -783,7 +783,7 @@ mod tests {
     async fn permission_reply(broker: Option<Answer>) -> Value {
         let (mut agent_out, client_in) = tokio::io::duplex(4096);
         let (client_out, agent_in) = tokio::io::duplex(4096);
-        let broker = broker.map(|answer| Arc::new(answer) as Arc<dyn PermissionBroker>);
+        let broker = broker.map(|answer| Arc::new(answer) as Arc<dyn AcpBroker>);
         let connection = Connection::new(client_in, client_out, broker);
         let (sender, _updates) = mpsc::unbounded_channel();
         connection.route_updates("a", "key-a", sender);
@@ -832,7 +832,7 @@ mod tests {
     async fn the_claude_adapters_rate_limit_reaches_the_broker() {
         let (mut agent, client) = tokio::io::duplex(4096);
         let (heard, mut rate_limits) = mpsc::unbounded_channel();
-        let broker = Arc::new(Hears(heard)) as Arc<dyn PermissionBroker>;
+        let broker = Arc::new(Hears(heard)) as Arc<dyn AcpBroker>;
         let _connection = Connection::new(client, tokio::io::sink(), Some(broker));
         let usage = |meta: Value| {
             let update =

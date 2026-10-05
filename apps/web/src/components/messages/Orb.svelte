@@ -18,16 +18,8 @@
     const [r, g, b] = rgb(canvas)
     const rate = speed(kind, size)
     const paint = (seconds) => {
-      const { dots, lines } = orbFrame(kind, size, 0.6 + seconds * rate)
+      const dots = orbFrame(kind, size, 0.6 + seconds * rate)
       ctx.clearRect(0, 0, size, size)
-      for (const line of lines) {
-        ctx.strokeStyle = `rgb(${r} ${g} ${b} / ${ink(line.white, line.alpha)})`
-        ctx.lineWidth = line.width
-        ctx.beginPath()
-        ctx.moveTo(line.x1, line.y1)
-        ctx.lineTo(line.x2, line.y2)
-        ctx.stroke()
-      }
       for (const d of dots) {
         ctx.fillStyle = `rgb(${r} ${g} ${b} / ${ink(d.white, d.alpha)})`
         ctx.beginPath()

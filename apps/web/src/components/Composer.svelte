@@ -4,7 +4,7 @@
 -->
 <script>
   import { tick } from 'svelte'
-  import { app, notify, submit, steer, stop, setApprovalMode, setYolo, formatInterval, currentPreset, setPreset, planMode, setPlanMode, attachFiles, dropAttachment, splitAttachments, draftKey, getDraft, setDraft } from '../lib/state.svelte.js'
+  import { app, notify, submit, steer, stop, setApprovalMode, setYolo, formatInterval, currentPreset, setPreset, planMode, setPlanMode, attachFiles, dropAttachment, splitAttachments, draftKey, getDraft, setDraft, isFileDrag } from '../lib/state.svelte.js'
   import { matchCommands, runCommand } from '../lib/commands.js'
   import { tokens, cost, percent, contextTokens, perSecond } from '../lib/format.js'
   import Popover from './Popover.svelte'
@@ -66,12 +66,6 @@
       input.style.height = `${Math.min(input.scrollHeight, 280)}px`
     })
   })
-
-  /** During a drag the browser hides the files, so the `Files` type is the only honest test:
-   *  answering true for dragged text would swallow a drop the textarea should handle itself. */
-  function isFileDrag(e) {
-    return [...(e.dataTransfer?.types ?? [])].includes('Files')
-  }
 
   function ondragover(e) {
     if (!isFileDrag(e)) return

@@ -1167,14 +1167,14 @@ impl RunManager {
         let run_id = run.id;
         let (broadcast_tx, control) = self.register_active_run(run_id).await;
         let agent = self
-            .build_run_agent(&run_preset, run_effort, &provider, &model)
+            .build_run_agent(
+                &run_preset,
+                run_effort,
+                &provider,
+                &model,
+                session.source == crate::chat::SESSION_SOURCE,
+            )
             .await;
-        // Only a bot in the chat has a team to ask.
-        let agent = if session.source == crate::chat::SESSION_SOURCE {
-            agent
-        } else {
-            Arc::new(Agent::clone(&agent).without_tools(&silver_core::tools::team::TEAM_TOOLS))
-        };
         let services = self.run_services(run_preset);
 
         let task = RunTask {
@@ -1222,7 +1222,7 @@ impl RunManager {
             if !effort.is_empty() && !crate::config::is_valid_reasoning_effort(effort) {
                 return Err(CoreError::InvalidRequest(format!(
                     "reasoning_effort {effort:?} must be one of {}",
-                    crate::config::REASONING_EFFORTS.join(", ")
+                    crate::config::REASONING_EFFORT_LADDER.join(", ")
                 )));
             }
         }
@@ -1453,13 +1453,15 @@ impl RunManager {
         (broadcast_tx, control)
     }
 
-    /// The run's agent: the base agent with the preset's tools and the clamped effort.
+    /// The run's agent: the base agent with the preset's tools and the clamped effort. The team
+    /// tools are denied on the base agent; only a bot in the chat gets them back.
     async fn build_run_agent(
         &self,
         run_preset: &Option<Preset>,
         run_effort: Option<String>,
         provider: &str,
         model: &str,
+        chat: bool,
     ) -> Arc<Agent> {
         let run_effort = if let Some(effort) = run_effort {
             let supported = match &self.context_resolver {
@@ -1477,18 +1479,28 @@ impl RunManager {
         } else {
             None
         };
+        // `with_only_tools` clears the base deny-list, so the team tools must be hidden again
+        // for any run outside the chat (and shown again for one inside it).
+        let team = |agent: Agent| {
+            if chat {
+                agent.with_tools(&silver_core::tools::team::TEAM_TOOLS)
+            } else {
+                agent.without_tools(&silver_core::tools::team::TEAM_TOOLS)
+            }
+        };
         match (run_preset, run_effort) {
-            (Some(preset), Some(level)) => Arc::new(
+            (Some(preset), Some(level)) => Arc::new(team(
                 Agent::clone(&self.agent)
                     .with_only_tools(&preset.tools)
                     .with_reasoning_effort(Some(level.as_str())),
-            ),
-            (Some(preset), None) => {
-                Arc::new(Agent::clone(&self.agent).with_only_tools(&preset.tools))
-            }
-            (None, Some(level)) => {
-                Arc::new(Agent::clone(&self.agent).with_reasoning_effort(Some(level.as_str())))
-            }
+            )),
+            (Some(preset), None) => Arc::new(team(
+                Agent::clone(&self.agent).with_only_tools(&preset.tools),
+            )),
+            (None, Some(level)) => Arc::new(team(
+                Agent::clone(&self.agent).with_reasoning_effort(Some(level.as_str())),
+            )),
+            (None, None) if chat => Arc::new(team(Agent::clone(&self.agent))),
             (None, None) => Arc::clone(&self.agent),
         }
     }

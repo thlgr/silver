@@ -62,7 +62,7 @@ function orbits(size, t) {
       dots.push(dot(p, (1.2 + 1.6 * depth) * multiplier * rs, 0.3 - 0.22 * depth))
     }
   }
-  return { dots, lines: [] }
+  return dots
 }
 
 /** The listening orb: a breathing, rippling lattice of dots. */
@@ -89,20 +89,16 @@ function lattice(size, t) {
       dots.push(dot(p, (0.6 + 1.7 * depth) * multiplier * (1 + 0.4 * crest) * rs, 0.66 - 0.56 * depth - 0.1 * crest))
     }
   }
-  return { dots, lines: [] }
+  return dots
 }
 
-/** The dots and lines to draw for a state at engine time `t` (already scaled by `speed`). */
+/** The dots to draw for a state at engine time `t` (already scaled by `speed`). */
 export function orbFrame(state, size, t) {
   const frame = state === 'listening' ? lattice : orbits
-  const { dots, lines } = frame(size, t)
-  return {
-    dots: dots
-      .filter((d) => d.alpha >= 0.02)
-      .map((d) => ({ ...d, radius: Math.max(0.3, d.radius) }))
-      .sort((a, b) => a.z - b.z),
-    lines: lines.filter((l) => l.alpha >= 0.02),
-  }
+  return frame(size, t)
+    .filter((d) => d.alpha >= 0.02)
+    .map((d) => ({ ...d, radius: Math.max(0.3, d.radius) }))
+    .sort((a, b) => a.z - b.z)
 }
 
 /** How strongly something that is `white` (0 dark … 1 light) at `alpha` is inked. */

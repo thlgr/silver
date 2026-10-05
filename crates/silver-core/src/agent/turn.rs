@@ -514,6 +514,15 @@ impl Agent {
         self
     }
 
+    /// Show `tools` to this run again, undoing a deny-list entry. A chat bot lifts the team
+    /// tools the base agent denies to everyone else.
+    pub fn with_tools(mut self, tools: &[&str]) -> Self {
+        for tool in tools {
+            self.tool_deny.remove(*tool);
+        }
+        self
+    }
+
     /// Restrict this run to exactly `tools`: the toolset filter is lifted and the name
     /// deny-list is cleared, so a deny-listed tool is visible once listed. An empty
     /// list means no tools.

@@ -1,6 +1,6 @@
-//! A bot stops, and is not started, once its provider's session limit is nearly used up. Windows
-//! are read every minute (Claude's also come with its turns), kept, shown on each agent and reply,
-//! and the session window is checked against [STOP_AT]. A provider we cannot read never blocks.
+//! A bot stops, and is not started, once its provider's session limit is nearly used up. OpenCode
+//! Go's windows are polled every minute; Claude's arrive with its turns, so a provider we cannot
+//! read never blocks. Readings are kept, shown on each agent and reply, checked against [STOP_AT].
 
 use super::store::{now_ms, BotRow};
 use super::{ChatHub, Lane, State};
@@ -10,7 +10,6 @@ use serde_json::Value;
 use silver_protocol::chat::{BotKind, LimitWindow};
 use silver_protocol::providers::preset;
 use std::borrow::Cow;
-use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::time::MissedTickBehavior;
@@ -20,37 +19,14 @@ const STOP_AT: f64 = 90.0;
 /// How often each provider's limit is read. Neither endpoint is meant to be polled quickly.
 const EVERY: Duration = Duration::from_secs(60);
 const FETCH_TIMEOUT: Duration = Duration::from_secs(10);
-const CLAUDE_USAGE_URL: &str = "https://api.anthropic.com/api/oauth/usage";
 
-/// The provider's usage windows, the session first, or `None` when it has no way to ask.
+/// The provider's usage windows, the session first, or `None` when it has no way to ask (Claude's
+/// come with its turns instead).
 async fn fetch(routed: &RoutedModel, provider: &str) -> Option<anyhow::Result<Vec<LimitWindow>>> {
-    Some(match provider {
-        "claude" => claude(routed.http()).await,
-        "opencode-go" => opencode_go(routed, provider).await,
-        _ => return None,
-    })
-}
-
-/// Claude Code keeps its sign-in in `.credentials.json`. The token is only read: Claude Code
-/// refreshes it, and a second refresh here would invalidate the one it holds.
-async fn claude(http: &reqwest::Client) -> anyhow::Result<Vec<LimitWindow>> {
-    let dir = match std::env::var_os("CLAUDE_CONFIG_DIR") {
-        Some(dir) => PathBuf::from(dir),
-        None => silver_core::dirs::home_dir()
-            .context("no home directory")?
-            .join(".claude"),
-    };
-    let file = tokio::fs::read(dir.join(".credentials.json"))
-        .await
-        .context("Claude Code's sign-in file could not be read")?;
-    let credentials: Value = serde_json::from_slice(&file)?;
-    let token = credentials["claudeAiOauth"]["accessToken"]
-        .as_str()
-        .context("Claude Code's sign-in file has no access token")?;
-    let request = http
-        .get(CLAUDE_USAGE_URL)
-        .header("anthropic-beta", "oauth-2025-04-20");
-    claude_windows(&get_json(request, token).await?)
+    match provider {
+        "opencode-go" => Some(opencode_go(routed, provider).await),
+        _ => None,
+    }
 }
 
 async fn opencode_go(routed: &RoutedModel, provider: &str) -> anyhow::Result<Vec<LimitWindow>> {
@@ -91,15 +67,16 @@ const CLAUDE_WINDOWS: [(&str, &str); 4] = [
     ("seven_day_sonnet", "Week · Sonnet"),
 ];
 
-/// The windows of a Claude plan that `read` finds, as a share used out of 100 and a reset in
-/// milliseconds. The session window is required; the rest are whichever the plan has.
-fn claude_plan(read: impl Fn(&str) -> Option<(f64, Option<i64>)>) -> Option<Vec<LimitWindow>> {
+/// The adapter's rate-limit info, sent with a turn's usage: `{"status": "allowed",
+/// "unifiedWindows": {"five_hour": {"utilization": 0.68, "resetsAt": 1791211200}, "seven_day":
+/// {..}}, ..}`. A share is out of one and a reset is in seconds; the session window is required.
+fn claude_rate_limit(info: &Value) -> Option<Vec<LimitWindow>> {
     let window = |(key, name): (&str, &str)| {
-        let (percent, resets_at) = read(key)?;
+        let window = &info["unifiedWindows"][key];
         Some(LimitWindow {
             name: name.into(),
-            percent,
-            resets_at,
+            percent: (window["utilization"].as_f64()? * 1000.0).round() / 10.0,
+            resets_at: window["resetsAt"].as_i64().map(|seconds| seconds * 1000),
         })
     };
     let [session, more @ ..] = CLAUDE_WINDOWS;
@@ -108,32 +85,6 @@ fn claude_plan(read: impl Fn(&str) -> Option<(f64, Option<i64>)>) -> Option<Vec<
             .chain(more.into_iter().filter_map(window))
             .collect(),
     )
-}
-
-/// `{"five_hour": {"utilization": 35.0, "resets_at": "2026-02-06T22:00:00+00:00"}, "seven_day":
-/// {..}, "seven_day_opus": null, ..}`.
-fn claude_windows(body: &Value) -> anyhow::Result<Vec<LimitWindow>> {
-    claude_plan(|key| {
-        let window = &body[key];
-        Some((
-            window["utilization"].as_f64()?,
-            window["resets_at"].as_str().and_then(unix_ms),
-        ))
-    })
-    .with_context(|| format!("no five_hour window in the usage reply: {}", clip(body)))
-}
-
-/// The adapter's rate-limit info, sent with a turn's usage: `{"status": "allowed",
-/// "unifiedWindows": {"five_hour": {"utilization": 0.68, "resetsAt": 1791211200}, "seven_day":
-/// {..}}, ..}`. A share is out of one and a reset is in seconds.
-fn claude_rate_limit(info: &Value) -> Option<Vec<LimitWindow>> {
-    claude_plan(|key| {
-        let window = &info["unifiedWindows"][key];
-        Some((
-            (window["utilization"].as_f64()? * 1000.0).round() / 10.0,
-            window["resetsAt"].as_i64().map(|seconds| seconds * 1000),
-        ))
-    })
 }
 
 /// `{"usage": {"rolling": {"status": "ok", "percent": 1, "resetsAt": "2026-09-13T10:42:47.510Z"},
@@ -372,25 +323,6 @@ mod tests {
             percent,
             resets_at: resets_in.map(|ms| now_ms() + ms),
         }
-    }
-
-    #[test]
-    fn claude_reports_its_windows_session_first() {
-        let body = json!({
-            "five_hour": { "utilization": 35.0, "resets_at": "2026-02-06T22:00:00+00:00" },
-            "seven_day": { "utilization": 14.0, "resets_at": "2026-02-12T20:00:00+00:00" },
-            "seven_day_opus": null,
-            "seven_day_sonnet": { "utilization": 39.0, "resets_at": "2026-02-09T14:00:00+00:00" },
-        });
-        let windows = claude_windows(&body).unwrap();
-        let named: Vec<(&str, f64)> = windows.iter().map(|w| (&*w.name, w.percent)).collect();
-        assert_eq!(
-            named,
-            [("Session", 35.0), ("Week", 14.0), ("Week · Sonnet", 39.0)]
-        );
-        assert_eq!(windows[0].resets_at, Some(1_770_415_200_000));
-        // Without a session window there is nothing to stop on.
-        assert!(claude_windows(&json!({ "seven_day": { "utilization": 14.0 } })).is_err());
     }
 
     #[test]
