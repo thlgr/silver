@@ -118,7 +118,6 @@ function apply(event) {
   if (event.type === 'bot') upsertBot(event.bot)
   else if (event.type === 'bot_removed') dropBot(event.id)
   else if (event.type === 'entry') upsertEntry(event.entry)
-  else if (event.type === 'entry_removed') removeEntry(event.id, event.chat_id)
   else if (event.type === 'resync') reload()
 }
 
@@ -176,7 +175,7 @@ function dropBot(id) {
 function upsertEntry(entry) {
   // Kept even for a chat that is not open, so its reply can name the notification. A thread
   // entry also re-publishes the root it hangs off, so only a newer reply may replace the last.
-  if (entry.kind === 'agent' && entry.final && entry.text) {
+  if (entry.kind === 'agent' && entry.text) {
     const have = lastReply.get(entry.chat_id)
     if (!have || entry.created_at > have.at) lastReply.set(entry.chat_id, { text: entry.text, at: entry.created_at })
   }
@@ -191,15 +190,6 @@ function upsertEntry(entry) {
   }
   const next = entries.findIndex((have) => !have.local && have.seq > entry.seq)
   entries.splice(next < 0 ? entries.findLastIndex((have) => !have.local) + 1 : next, 0, entry)
-}
-
-function removeEntry(id, chatId) {
-  for (const key of Object.keys(chat.lanes)) {
-    if (key !== chatId && !key.startsWith(`${chatId}/`)) continue
-    const entries = chat.lanes[key].entries
-    const at = entries.findIndex((entry) => entry.id === id)
-    if (at >= 0) entries.splice(at, 1)
-  }
 }
 
 // ---------------------------------------------------------------- lanes
@@ -261,7 +251,7 @@ export async function send(botId, text, thread = null, nonce = crypto.randomUUID
   // Sending is a gesture, so this is the moment the browser lets us ask to notify.
   if (typeof Notification !== 'undefined' && Notification.permission === 'default') Notification.requestPermission()
   const entries = lane(laneKey(botId, thread)).entries
-  const local = { id: `local-${nonce}`, local: true, seq: Number.MAX_SAFE_INTEGER, chat_id: botId, thread_id: thread, kind: 'user', text, final: true, status: 'sending', nonce, reactions: [], created_at: Date.now() }
+  const local = { id: `local-${nonce}`, local: true, seq: Number.MAX_SAFE_INTEGER, chat_id: botId, thread_id: thread, kind: 'user', text, status: 'sending', nonce, reactions: [], created_at: Date.now() }
   entries.push(local)
   try {
     upsertEntry(await api(`/v1/chat/bots/${botId}/send`, { method: 'POST', body: { text, thread_id: thread, nonce } }))

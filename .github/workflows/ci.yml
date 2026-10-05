@@ -11,11 +11,17 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
+  # CI builds are closer to from-scratch than a local edit loop, where incremental
+  # only adds dependency-tracking overhead and harms cache reuse.
+  CARGO_INCREMENTAL: "0"
 
 jobs:
   check:
     name: fmt, clippy, test
     runs-on: ubuntu-latest
+    env:
+      SCCACHE_GHA_ENABLED: "true"
+      RUSTC_WRAPPER: "sccache"
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -25,29 +31,30 @@ jobs:
         with:
           components: rustfmt, clippy
 
-      - name: Cache cargo registry and git
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-
+      # Cross-run object cache; complements rust-cache, which caches deps in target.
+      - name: Run sccache
+        uses: mozilla-actions/sccache-action@v0.0.11
 
-      - name: Cache target directory
-        uses: actions/cache@v4
-        with:
-          path: target
-          key: ${{ runner.os }}-target-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-target-
+      # Caches the registry and dependency artifacts only. Workspace crates are
+      # rebuilt every run, so a fresh commit never restores stale ones.
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
 
       - name: Format
         run: cargo fmt --all -- --check
 
+      - name: Install cargo-machete
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-machete
+
+      - name: Unused dependencies
+        run: cargo machete
+
       - name: Clippy
-        run: cargo clippy --workspace --all-targets -- -D warnings
+        # --no-default-features skips the pdf-extract stack for a fast cold lint;
+        # the test step builds the default (pdf) features.
+        run: cargo clippy --workspace --all-targets --no-default-features -- -D warnings
 
       - name: Test
         run: cargo test --workspace
@@ -101,12 +108,17 @@ jobs:
       # match them exactly.
       CARGO_HOME: ${{ github.workspace }}/.cargo-home
       CARGO_TARGET_DIR: ${{ github.workspace }}/target
+      SCCACHE_GHA_ENABLED: "true"
+      RUSTC_WRAPPER: "sccache"
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
+
+      - name: Run sccache
+        uses: mozilla-actions/sccache-action@v0.0.11
 
       - name: Cache cargo registry, git and target
         uses: actions/cache@v4
@@ -128,3 +140,6 @@ jobs:
           bash scripts/tools_e2e.sh | tee /tmp/tools_e2e.log
           grep -q 'hi-from-bash' /tmp/tools_e2e.log
           grep -q 'tool_result:' /tmp/tools_e2e.log
+
+      - name: Run bot chat e2e
+        run: python3 scripts/chat_e2e.py

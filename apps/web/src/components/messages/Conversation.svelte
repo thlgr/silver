@@ -32,7 +32,7 @@
   let pinned = true
   let focused = $state(document.hasFocus())
 
-  const items = $derived(buildItems(entries, working))
+  const items = $derived(buildItems(entries))
   // The approval card already says what the bot waits for.
   const waiting = $derived(entries.some((entry) => entry.permission?.status === 'pending'))
 

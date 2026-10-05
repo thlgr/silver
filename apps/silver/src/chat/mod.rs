@@ -529,18 +529,6 @@ impl ChatHub {
         }
     }
 
-    pub async fn remove_entry(&self, entry: ChatEntry) -> CoreResult<()> {
-        self.db.chat_delete_entry(&entry.id).await?;
-        self.emit(ChatEvent::EntryRemoved {
-            id: entry.id,
-            chat_id: entry.chat_id,
-        });
-        if let Some(root) = &entry.thread_id {
-            self.publish_root(root).await;
-        }
-        Ok(())
-    }
-
     /// Write an entry's changes to disk and tell clients.
     pub async fn save_entry(&self, entry: ChatEntry) -> CoreResult<ChatEntry> {
         let entry = self.db.chat_update_entry(entry).await?;
@@ -681,7 +669,6 @@ fn new_entry(chat: &str, thread: Option<&str>, kind: EntryKind) -> ChatEntry {
         kind,
         author: None,
         text: String::new(),
-        is_final: true,
         status: None,
         style: None,
         run_id: None,

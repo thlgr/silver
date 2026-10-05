@@ -180,9 +180,6 @@ pub struct ChatEntry {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub author: Option<String>,
     pub text: String,
-    /// False while an agent reply is still being written.
-    #[serde(rename = "final")]
-    pub is_final: bool,
     /// A user message's delivery state: `queued`, `failed` or `cancelled`; absent once sent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub status: Option<String>,
@@ -224,10 +221,6 @@ pub enum ChatEvent {
     Entry {
         entry: ChatEntry,
     },
-    EntryRemoved {
-        id: String,
-        chat_id: String,
-    },
     /// The stream fell behind; reload what is on screen.
     Resync,
 }
@@ -239,7 +232,6 @@ impl ChatEvent {
             ChatEvent::Bot { .. } => "bot",
             ChatEvent::BotRemoved { .. } => "bot_removed",
             ChatEvent::Entry { .. } => "entry",
-            ChatEvent::EntryRemoved { .. } => "entry_removed",
             ChatEvent::Resync => "resync",
         }
     }

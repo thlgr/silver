@@ -8,7 +8,6 @@ use std::path::{Path, PathBuf};
 use std::sync::{Mutex, PoisonError};
 use std::time::Duration;
 
-use serde_json::Value;
 use silver_core::error::CoreError;
 
 /// One external ACP agent mode.
@@ -22,34 +21,6 @@ pub struct AgentMode {
     pub command: Option<&'static str>,
     /// What to tell someone setting it up by hand.
     pub setup: &'static str,
-    /// Shell command that signs in (`{bin}` = the CLI).
-    pub login: Option<&'static str>,
-    /// How to tell whether it is signed in without starting it.
-    pub signed_in: Option<SignInCheck>,
-}
-
-/// `<bin> <args>`, judged by exit code and stdout.
-#[derive(Clone, Copy)]
-pub struct SignInCheck {
-    pub args: &'static str,
-    pub ok: fn(bool, &str) -> bool,
-}
-
-fn exit_ok(success: bool, _: &str) -> bool {
-    success
-}
-
-fn claude_signed_in(_: bool, out: &str) -> bool {
-    serde_json::from_str::<Value>(out).is_ok_and(|v| v["loggedIn"] == true)
-}
-
-fn qoder_signed_in(_: bool, out: &str) -> bool {
-    serde_json::from_str::<Value>(out).is_ok_and(|v| v["logged_in"] == true)
-}
-
-fn says_logged_in(_: bool, out: &str) -> bool {
-    let out = out.to_lowercase();
-    out.contains("logged in") && !out.contains("not logged in")
 }
 
 /// Every mode this build knows, in catalog order. `codex` is not here: silver drives Codex
@@ -63,8 +34,6 @@ pub const MODES: &[AgentMode] = &[
         // uses the CLI's own sign-in. Pinned as the ACP registry pins it.
         command: Some("npx -y @agentclientprotocol/claude-agent-acp@0.85.1"),
         setup: "Install Claude Code (curl -fsSL https://claude.ai/install.sh | bash) and run `claude auth login`. It runs through an adapter that npx fetches, so Node.js must be installed too.",
-        login: Some("{bin} auth login"),
-        signed_in: Some(SignInCheck { args: "auth status", ok: claude_signed_in }),
     },
     AgentMode {
         id: "cursor",
@@ -72,8 +41,6 @@ pub const MODES: &[AgentMode] = &[
         bins: &["cursor-agent", "agent"],
         command: Some("{bin} acp"),
         setup: "Install Cursor CLI (curl https://cursor.com/install -fsS | bash) and run `cursor-agent login`.",
-        login: Some("NO_OPEN_BROWSER=1 {bin} login"),
-        signed_in: Some(SignInCheck { args: "status", ok: says_logged_in }),
     },
     AgentMode {
         id: "pi",
@@ -81,8 +48,6 @@ pub const MODES: &[AgentMode] = &[
         bins: &["pi"],
         command: None,
         setup: "Install pi (npm install -g @earendil-works/pi-coding-agent), run `pi` and type /login.",
-        login: Some("{bin}"),
-        signed_in: None,
     },
     AgentMode {
         id: "opencode",
@@ -90,8 +55,6 @@ pub const MODES: &[AgentMode] = &[
         bins: &["opencode"],
         command: Some("{bin} acp"),
         setup: "Install OpenCode (curl -fsSL https://opencode.ai/install | bash) and run `opencode auth login`.",
-        login: Some("{bin} auth login"),
-        signed_in: None,
     },
     AgentMode {
         id: "grok",
@@ -99,8 +62,6 @@ pub const MODES: &[AgentMode] = &[
         bins: &["grok"],
         command: Some("{bin} agent stdio"),
         setup: "Install Grok Build (curl -fsSL https://x.ai/cli/install.sh | bash) and run `grok login --device-auth`.",
-        login: Some("{bin} login --device-auth"),
-        signed_in: None,
     },
     AgentMode {
         id: "gemini",
@@ -108,8 +69,6 @@ pub const MODES: &[AgentMode] = &[
         bins: &["gemini"],
         command: Some("{bin} --acp"),
         setup: "Install Gemini CLI (npm install -g @google/gemini-cli) and run `gemini` to sign in with Google.",
-        login: Some("NO_BROWSER=true {bin}"),
-        signed_in: None,
     },
     AgentMode {
         id: "copilot",
@@ -117,8 +76,6 @@ pub const MODES: &[AgentMode] = &[
         bins: &["copilot"],
         command: Some("{bin} --acp --stdio"),
         setup: "Install Copilot CLI (npm install -g @github/copilot) and run `copilot login`.",
-        login: Some("{bin} login --device-code"),
-        signed_in: None,
     },
     AgentMode {
         id: "qwen",
@@ -126,8 +83,6 @@ pub const MODES: &[AgentMode] = &[
         bins: &["qwen"],
         command: Some("{bin} --acp"),
         setup: "Install Qwen Code (npm install -g @qwen-code/qwen-code), run `qwen` and type /auth.",
-        login: Some("{bin}"),
-        signed_in: None,
     },
     AgentMode {
         id: "goose",
@@ -135,8 +90,6 @@ pub const MODES: &[AgentMode] = &[
         bins: &["goose"],
         command: Some("{bin} acp"),
         setup: "Install goose and run `goose configure`.",
-        login: Some("{bin} configure"),
-        signed_in: None,
     },
     AgentMode {
         id: "kimi",
@@ -144,8 +97,6 @@ pub const MODES: &[AgentMode] = &[
         bins: &["kimi"],
         command: Some("{bin} acp"),
         setup: "Install Kimi Code (curl -fsSL https://code.kimi.com/kimi-code/install.sh | bash) and run `kimi login`.",
-        login: Some("{bin} login"),
-        signed_in: None,
     },
     AgentMode {
         id: "droid",
@@ -153,8 +104,6 @@ pub const MODES: &[AgentMode] = &[
         bins: &["droid"],
         command: Some("{bin} exec --output-format acp-daemon"),
         setup: "Install Droid (curl -fsSL https://app.factory.ai/cli | sh) and sign in with `droid`.",
-        login: Some("{bin}"),
-        signed_in: None,
     },
     AgentMode {
         id: "amp",
@@ -162,8 +111,6 @@ pub const MODES: &[AgentMode] = &[
         bins: &["amp"],
         command: None,
         setup: "Install Amp (curl -fsSL https://ampcode.com/install.sh | bash) and run `amp login`.",
-        login: Some("{bin} login"),
-        signed_in: None,
     },
     AgentMode {
         id: "kilo",
@@ -171,8 +118,6 @@ pub const MODES: &[AgentMode] = &[
         bins: &["kilo"],
         command: Some("{bin} acp"),
         setup: "Install Kilo CLI (npm install -g @kilocode/cli) and run `kilo auth login`.",
-        login: Some("{bin} auth login"),
-        signed_in: Some(SignInCheck { args: "profile --json", ok: exit_ok }),
     },
     AgentMode {
         id: "cline",
@@ -180,8 +125,6 @@ pub const MODES: &[AgentMode] = &[
         bins: &["cline"],
         command: Some("{bin} --acp"),
         setup: "Install Cline CLI (npm install -g cline) and run `cline auth`.",
-        login: Some("{bin} auth"),
-        signed_in: None,
     },
     AgentMode {
         id: "auggie",
@@ -189,8 +132,6 @@ pub const MODES: &[AgentMode] = &[
         bins: &["auggie"],
         command: Some("{bin} --acp"),
         setup: "Install Auggie (npm install -g @augmentcode/auggie) and run `auggie login`.",
-        login: Some("{bin} login"),
-        signed_in: Some(SignInCheck { args: "account status", ok: exit_ok }),
     },
     AgentMode {
         id: "vibe",
@@ -198,8 +139,6 @@ pub const MODES: &[AgentMode] = &[
         bins: &["vibe-acp", "vibe"],
         command: None,
         setup: "Install Mistral Vibe (curl -LsSf https://mistral.ai/vibe/install.sh | bash) and run `vibe --setup`.",
-        login: Some("vibe --setup"),
-        signed_in: None,
     },
     AgentMode {
         id: "kiro",
@@ -207,8 +146,6 @@ pub const MODES: &[AgentMode] = &[
         bins: &["kiro-cli"],
         command: Some("{bin} acp"),
         setup: "Install Kiro CLI (curl -fsSL https://cli.kiro.dev/install | bash) and run `kiro-cli login`.",
-        login: Some("{bin} login"),
-        signed_in: None,
     },
     AgentMode {
         id: "devin",
@@ -216,8 +153,6 @@ pub const MODES: &[AgentMode] = &[
         bins: &["devin"],
         command: Some("{bin} acp"),
         setup: "Install the Devin CLI (curl -fsSL https://cli.devin.ai/install.sh | bash) and run `devin auth login`.",
-        login: Some("{bin} auth login"),
-        signed_in: None,
     },
     AgentMode {
         id: "qoder",
@@ -225,8 +160,6 @@ pub const MODES: &[AgentMode] = &[
         bins: &["qodercli"],
         command: Some("{bin} --acp"),
         setup: "Install Qoder CLI (npm install -g @qoder-ai/qodercli) and run `qodercli login`.",
-        login: Some("{bin} login"),
-        signed_in: Some(SignInCheck { args: "status -o json", ok: qoder_signed_in }),
     },
     AgentMode {
         id: "codebuddy",
@@ -234,8 +167,6 @@ pub const MODES: &[AgentMode] = &[
         bins: &["codebuddy", "cbc"],
         command: Some("{bin} --acp"),
         setup: "Install CodeBuddy Code (npm install -g @tencent-ai/codebuddy-code) and sign in with `codebuddy`.",
-        login: Some("{bin}"),
-        signed_in: None,
     },
     AgentMode {
         id: "minimax",
@@ -243,8 +174,6 @@ pub const MODES: &[AgentMode] = &[
         bins: &["mcode"],
         command: Some("{bin} acp"),
         setup: "Install MiniMax Code (npm install -g @minimax-ai/code) and run `mcode login`.",
-        login: Some("{bin} login"),
-        signed_in: None,
     },
     AgentMode {
         id: "junie",
@@ -252,8 +181,6 @@ pub const MODES: &[AgentMode] = &[
         bins: &["junie"],
         command: Some("{bin} --acp=true"),
         setup: "Install Junie (curl -fsSL https://junie.jetbrains.com/install.sh | bash) and sign in with `junie`.",
-        login: Some("{bin}"),
-        signed_in: None,
     },
     AgentMode {
         id: "antigravity",
@@ -261,8 +188,6 @@ pub const MODES: &[AgentMode] = &[
         bins: &["agy"],
         command: None,
         setup: "Install the Antigravity CLI (curl -fsSL https://antigravity.google/cli/install.sh | bash) and sign in with `agy`.",
-        login: Some("{bin}"),
-        signed_in: None,
     },
     AgentMode {
         id: "cortex",
@@ -270,8 +195,6 @@ pub const MODES: &[AgentMode] = &[
         bins: &["cortex"],
         command: Some("{bin} acp serve"),
         setup: "Install Cortex Code (curl -LsS https://ai.snowflake.com/static/cc-scripts/install.sh | sh) and set up a connection with `cortex`.",
-        login: Some("{bin}"),
-        signed_in: None,
     },
     AgentMode {
         id: "poolside",
@@ -279,8 +202,6 @@ pub const MODES: &[AgentMode] = &[
         bins: &["pool"],
         command: Some("{bin} acp"),
         setup: "Install Poolside (curl -fsSL https://downloads.poolside.ai/pool/install.sh | sh) and run `pool login`.",
-        login: Some("{bin} login"),
-        signed_in: None,
     },
 ];
 
@@ -477,62 +398,6 @@ pub fn command_for(id: &str) -> Result<Option<String>, CoreError> {
         &shell_quote(&bin.to_string_lossy()),
         1,
     )))
-}
-
-// MARK: sign-in
-
-/// Last sign-in check per mode id; missing = can't tell.
-static SIGNED_IN: Mutex<Vec<(String, bool)>> = Mutex::new(Vec::new());
-
-/// What the last sign-in check found for `id`.
-pub fn signed_in(id: &str) -> Option<bool> {
-    SIGNED_IN
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
-        .iter()
-        .find(|(mode, _)| mode == id)
-        .map(|(_, ok)| *ok)
-}
-
-fn set_signed_in(id: &str, state: Option<bool>) {
-    let mut map = SIGNED_IN.lock().unwrap_or_else(PoisonError::into_inner);
-    map.retain(|(mode, _)| mode != id);
-    if let Some(ok) = state {
-        map.push((id.to_owned(), ok));
-    }
-}
-
-/// Re-checks every installed mode that can report its sign-in state. Best effort: a check that
-/// fails, times out or reports nothing leaves the previous state.
-pub async fn refresh_sign_in() {
-    let checks = MODES.iter().filter_map(|mode| {
-        let check = mode.signed_in?;
-        let bin = mode.bins.iter().find_map(|b| which(b))?;
-        Some(async move {
-            let run = tokio::process::Command::new(bin)
-                .args(check.args.split_whitespace())
-                .stdin(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null())
-                .kill_on_drop(true)
-                .output();
-            let ok = match tokio::time::timeout(Duration::from_secs(15), run).await {
-                Ok(Ok(out)) => Some((check.ok)(
-                    out.status.success(),
-                    &String::from_utf8_lossy(&out.stdout),
-                )),
-                Ok(Err(error)) => {
-                    tracing::info!(mode = mode.id, %error, "sign-in check failed");
-                    None
-                }
-                Err(_) => None,
-            };
-            (mode.id, ok)
-        })
-    });
-    let results = futures::future::join_all(checks).await;
-    for (id, ok) in results {
-        set_signed_in(id, ok);
-    }
 }
 
 #[cfg(test)]

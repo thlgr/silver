@@ -14,7 +14,7 @@
   const rootEntry = $derived(chat.lanes[laneKey(botId)]?.entries.find((entry) => entry.id === root))
   const entries = $derived(chat.lanes[laneKey(botId, root)]?.entries ?? [])
   const working = $derived(bot ? workingIn(bot, root) : false)
-  const items = $derived(buildItems(entries, working).filter((item) => !item.separator))
+  const items = $derived(buildItems(entries).filter((item) => !item.separator))
   const replies = $derived(entries.filter((entry) => entry.kind === 'user' || entry.kind === 'agent').length)
   let scroller = $state()
   let content = $state()

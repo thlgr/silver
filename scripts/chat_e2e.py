@@ -60,7 +60,7 @@ def idle(*names):
 
 
 def said(chat, kind="agent", thread=None):
-    return [e for e in entries(chat, thread) if e["kind"] == kind and e["final"]]
+    return [e for e in entries(chat, thread) if e["kind"] == kind]
 
 
 def follow_entries(live, seen):

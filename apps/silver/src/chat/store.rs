@@ -81,14 +81,14 @@ fn bot_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<BotRow> {
     })
 }
 
-const ENTRY_COLUMNS: &str = "seq, id, chat_id, thread_id, kind, author, text, final, status, \
+const ENTRY_COLUMNS: &str = "seq, id, chat_id, thread_id, kind, author, text, status, \
     style, run_id, session_id, nonce, data, created_at";
 
 fn entry_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ChatEntry> {
     let kind: String = row.get(4)?;
-    let run: Option<String> = row.get(10)?;
-    let session: Option<String> = row.get(11)?;
-    let data: String = row.get(13)?;
+    let run: Option<String> = row.get(9)?;
+    let session: Option<String> = row.get(10)?;
+    let data: String = row.get(12)?;
     let data: EntryData = serde_json::from_str(&data).unwrap_or_default();
     Ok(ChatEntry {
         seq: row.get(0)?,
@@ -98,17 +98,16 @@ fn entry_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ChatEntry> {
         kind: EntryKind::parse(&kind).unwrap_or(EntryKind::Notice),
         author: row.get(5)?,
         text: row.get(6)?,
-        is_final: row.get(7)?,
-        status: row.get(8)?,
-        style: row.get(9)?,
+        status: row.get(7)?,
+        style: row.get(8)?,
         run_id: run.and_then(|id| id.parse::<RunId>().ok()),
         session_id: session.and_then(|id| id.parse::<SessionId>().ok()),
-        nonce: row.get(12)?,
+        nonce: row.get(11)?,
         reactions: data.reactions,
         thread: None,
         permission: data.permission,
         limits: data.limits,
-        created_at: row.get(14)?,
+        created_at: row.get(13)?,
     })
 }
 
@@ -234,9 +233,9 @@ impl Db {
     pub async fn chat_insert_entry(&self, mut entry: ChatEntry) -> DbResult<ChatEntry> {
         self.write(move |conn| {
             conn.execute(
-                "INSERT INTO chat_entries (id, chat_id, thread_id, kind, author, text, final, \
+                "INSERT INTO chat_entries (id, chat_id, thread_id, kind, author, text, \
                  status, style, run_id, session_id, nonce, data, created_at) \
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
                 params![
                     entry.id,
                     entry.chat_id,
@@ -244,7 +243,6 @@ impl Db {
                     entry.kind.as_str(),
                     entry.author,
                     entry.text,
-                    entry.is_final,
                     entry.status,
                     entry.style,
                     entry.run_id.map(|id| id.to_string()),
@@ -265,16 +263,9 @@ impl Db {
         let data = entry_data(&entry);
         self.write(move |conn| {
             conn.execute(
-                "UPDATE chat_entries SET text = ?2, final = ?3, status = ?4, style = ?5, \
-                 data = ?6 WHERE id = ?1",
-                params![
-                    entry.id,
-                    entry.text,
-                    entry.is_final,
-                    entry.status,
-                    entry.style,
-                    data
-                ],
+                "UPDATE chat_entries SET text = ?2, status = ?3, style = ?4, data = ?5 \
+                 WHERE id = ?1",
+                params![entry.id, entry.text, entry.status, entry.style, data],
             )?;
             Ok(entry)
         })
@@ -313,15 +304,6 @@ impl Db {
                     entry_from_row,
                 )
                 .optional()?)
-        })
-        .await
-    }
-
-    pub async fn chat_delete_entry(&self, id: &str) -> DbResult<()> {
-        let id = id.to_string();
-        self.write(move |conn| {
-            conn.execute("DELETE FROM chat_entries WHERE id = ?1", params![id])?;
-            Ok(())
         })
         .await
     }
@@ -366,7 +348,7 @@ impl Db {
             let mut stmt = conn.prepare(&format!(
                 "SELECT {ENTRY_COLUMNS} FROM (SELECT * FROM chat_entries \
                  WHERE chat_id = ?1 AND thread_id IS ?2 AND seq > ?3 AND kind IN ('user', 'agent') \
-                 AND final = 1 ORDER BY seq DESC LIMIT ?4) ORDER BY seq"
+                 ORDER BY seq DESC LIMIT ?4) ORDER BY seq"
             ))?;
             let rows = stmt.query_map(
                 params![chat, thread, after, i64::from(limit)],
@@ -414,7 +396,7 @@ impl Db {
             let marks = placeholders(2, roots.len());
             let mut stmt = conn.prepare(&format!(
                 "SELECT e.thread_id, e.kind, e.author, e.created_at, \
-                        (e.kind = 'agent' AND e.final = 1 AND e.seq > COALESCE(r.read_seq, 0)) \
+                        (e.kind = 'agent' AND e.seq > COALESCE(r.read_seq, 0)) \
                  FROM chat_entries e \
                  LEFT JOIN chat_reads r ON r.chat_id = e.chat_id AND r.thread_id = e.thread_id \
                  WHERE e.chat_id = ?1 AND e.thread_id IN ({marks}) AND e.kind IN ('user', 'agent') \
@@ -457,7 +439,7 @@ impl Db {
             let mut last = conn.prepare(
                 "SELECT chat_id, kind, author, text, created_at FROM chat_entries \
                  WHERE seq IN (SELECT MAX(seq) FROM chat_entries WHERE thread_id IS NULL \
-                               AND kind IN ('user', 'agent') AND final = 1 GROUP BY chat_id)",
+                               AND kind IN ('user', 'agent') GROUP BY chat_id)",
             )?;
             let mut rows = last.query([])?;
             while let Some(row) = rows.next()? {
@@ -473,7 +455,7 @@ impl Db {
                 "SELECT e.chat_id, COUNT(*) FROM chat_entries e \
                  LEFT JOIN chat_reads r ON r.chat_id = e.chat_id \
                       AND r.thread_id = COALESCE(e.thread_id, '') \
-                 WHERE e.kind = 'agent' AND e.final = 1 AND e.seq > COALESCE(r.read_seq, 0) \
+                 WHERE e.kind = 'agent' AND e.seq > COALESCE(r.read_seq, 0) \
                  GROUP BY e.chat_id",
             )?;
             let mut rows = unread.query([])?;
@@ -504,15 +486,10 @@ impl Db {
         .await
     }
 
-    /// After a restart nothing is still being written: finish half-written replies, and expire
-    /// the approvals no run is waiting on any more.
+    /// After a restart no run is still working: expire the approvals no run is waiting on, and
+    /// cancel the user messages still queued behind one.
     pub async fn chat_recover(&self) -> DbResult<()> {
         self.write(|conn| {
-            conn.execute(
-                "DELETE FROM chat_entries WHERE kind = 'agent' AND final = 0 AND text = ''",
-                [],
-            )?;
-            conn.execute("UPDATE chat_entries SET final = 1 WHERE final = 0", [])?;
             conn.execute(
                 "UPDATE chat_entries SET data = json_set(data, '$.permission.status', 'expired') \
                  WHERE kind = 'permission' AND json_extract(data, '$.permission.status') = 'pending'",
@@ -600,22 +577,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_restart_finishes_what_was_half_done() {
+    async fn a_restart_cancels_what_was_never_sent() {
         let db = database().await;
-        let mut partial = new_entry("chat", None, EntryKind::Agent);
-        partial.text = "half a reply".into();
-        partial.is_final = false;
-        let partial = db.chat_insert_entry(partial).await.unwrap();
-        let mut empty = new_entry("chat", None, EntryKind::Agent);
-        empty.is_final = false;
-        let empty = db.chat_insert_entry(empty).await.unwrap();
         let mut queued = new_entry("chat", None, EntryKind::User);
         queued.status = Some("queued".into());
         let queued = db.chat_insert_entry(queued).await.unwrap();
 
         db.chat_recover().await.unwrap();
-        assert!(db.chat_entry(&partial.id).await.unwrap().unwrap().is_final);
-        assert!(db.chat_entry(&empty.id).await.unwrap().is_none());
         let queued = db.chat_entry(&queued.id).await.unwrap().unwrap();
         assert_eq!(queued.status.as_deref(), Some("cancelled"));
     }
