@@ -44,8 +44,11 @@ Retire silver's Markdown memory and make ai-memory the memory of record.
   reimplement a harness's memory protocol either.
 - A run on a native provider has no harness hooks, so silver is its **lifecycle producer**: it
   posts the run's start, prompt, tool calls and end to ai-memory's `/hook/batch`
-  (`MemoryHooks`, `apps/silver/src/ai_memory.rs`), tagged `extension=silver` and scoped to the
-  workspace's `(workspace, project)`. One session can span several idle periods: after a quiet
+  (`MemoryHooks`, `apps/silver/src/ai_memory.rs`), scoped to the workspace's `(workspace, project)`
+  and tagged `extension=silver`. On the wire it reports as `agent=claude-code`: ai-memory keeps a
+  tool call's content only for the agent kinds it has a verified payload shape for, silver posts
+  exactly Claude Code's shape, and `extension=silver` carries the truth until silver has a kind of
+  its own upstream. One session can span several idle periods: after a quiet
   `session-end` ai-memory keeps the session's observations and rewrites its summary on the next
   end, so a later run needs no new start. A session ends in ai-memory once it has had no run for
   ten minutes, or at shutdown, which is when ai-memory writes its summary page and handoff. An ACP

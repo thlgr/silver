@@ -144,12 +144,12 @@ def main():
         handoff = SEEN["handoff"]
         assert handoff is not None, "the run never claimed the project handoff"
         assert handoff["workspace"] == ["default"] and handoff["project"] == ["memtest"], handoff
-        assert handoff["agent"] == ["silver"], handoff
+        assert handoff["agent"] == ["claude-code"], handoff
         prompt = open(PROMPT_PATH).read()
         assert "finish the parser" in prompt, "the handoff never reached the system prompt"
 
         for name, query, _ in SEEN["events"]:
-            assert query["extension"] == ["silver"] and query["agent"] == ["silver"], name
+            assert query["extension"] == ["silver"] and query["agent"] == ["claude-code"], name
             assert query["workspace"] == ["default"] and query["project"] == ["memtest"], name
             assert len(query["ingest_key"][0]) == 64, name
         tool = next(body for name, _, body in SEEN["events"] if name == "post-tool-use")
