@@ -174,6 +174,38 @@ def scenarios():
     assert said(coder), "the run went on after the approval"
     call("DELETE", f"/v1/chat/bots/{coder}")
 
+    # A bot on a provider with usage limits stamps them on each reply, is stopped when the session
+    # limit crosses 90%, is not started while it stays there, and answers again once it is back
+    # under. The mock stands in for OpenCode Go's usage endpoint.
+    call("POST", "/v1/auth/opencode-go", {"api_key": "k", "base_url": f"http://127.0.0.1:{MOCK_PORT}/zen/go/v1"})
+    usage = lambda percent: urllib.request.urlopen(f"http://127.0.0.1:{MOCK_PORT}/set-usage/{percent}", b"").read()
+    # Editing a bot reads its limit at once, so the test need not wait out the minute.
+    reread = lambda bot_id: call("PATCH", f"/v1/chat/bots/{bot_id}", {"provider": "opencode-go"})
+    limited = bot("Limited", provider="opencode-go", workspace_id=workspace)
+    time.sleep(1)  # a new bot has its provider's limits read at once
+    call("POST", f"/v1/chat/bots/{limited}/send", {"text": "how much is left"})
+    until("a reply", lambda: said(limited))
+    assert [(w["name"], w["percent"]) for w in said(limited)[0]["limits"]] == [("Session", 10), ("Week", 39), ("Month", 19)]
+    assert "limits" not in said(alice)[0], "a provider with no limit to read stamps nothing"
+    call("POST", f"/v1/chat/bots/{limited}/send", {"text": "please run a shell command"})
+    until("the card", lambda: roster()["Limited"]["status"] == "needs_input")
+    usage(95)
+    reread(limited)
+    until("stopped", idle("Limited"))
+    stopped = next(e for e in entries(limited) if e["kind"] == "notice" and e["text"].startswith("Stopped:"))
+    assert "95%" in stopped["text"] and "OpenCode Go" in stopped["text"], stopped
+    assert next(e for e in entries(limited) if e["kind"] == "permission")["permission"]["status"] == "expired"
+    call("POST", f"/v1/chat/bots/{limited}/send", {"text": "hello again"})
+    until("held", lambda: any(e["text"].startswith("Not started:") for e in entries(limited)))
+    assert len(said(limited)) == 1, "a bot at its limit does not answer"
+    usage(40)
+    reread(limited)
+    time.sleep(1)
+    call("POST", f"/v1/chat/bots/{limited}/send", {"text": "hello once more"})
+    until("it answers again", lambda: len(said(limited)) == 2)
+    assert said(limited)[1]["limits"][0]["percent"] == 40
+    call("DELETE", f"/v1/chat/bots/{limited}")
+
     # An external ACP agent's permission requests become approval cards too, and "approve
     # automatically" answers them itself. The agent here is scripts/fake_acp_agent.py.
     agent = os.path.join(ROOT, "scripts/fake_acp_agent.py")

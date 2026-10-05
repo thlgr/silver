@@ -145,6 +145,29 @@ also tells the agent to stop. Silver's own tools and the team tools are not the 
 
 A bot using one with no workspace works in the directory silver was started in; give it a workspace.
 
+## Usage limits
+
+Claude Code and OpenCode Go cap how much a plan can use in a short window, and a bot that runs into
+the cap fails half way through its work. Silver reads those limits so it can stop first.
+
+- **Which.** A bot whose agent is **Claude Code** reads the five-hour *session*, *week* and the
+  per-model weeks the plan has; one on the **OpenCode Go** provider reads its *session* (rolling),
+  *week* and *month*. Other agents have nothing we can read: no bar, never held.
+- **On the message.** Each reply carries the limits as they were when it was written: a thin bar for
+  the session, beside the bot's name in a group chat and beside the time in a bot's own chat, amber
+  from 75% and red from 90%. Hover it (tap it on a touch screen) for every window, with how much is
+  used and when it resets. Older replies keep the reading they were written with.
+- **At 90%.** A bot whose session is at 90% or more is not started: the message gets a *Not
+  started* notice with the reset time. A turn already running is stopped, what was queued behind it
+  is dropped, and the chat says *Stopped*. In a group the bot sits out like any member whose turn
+  failed. Only the session window decides, and the line is fixed.
+- **How it is read.** Once a minute, and at once when a bot is created or edited, for each provider
+  the bots use. Claude's reading uses the sign-in file Claude Code keeps (`~/.claude/.credentials.json`,
+  or under `CLAUDE_CONFIG_DIR`), so it needs Claude Code signed in on the machine silver runs on;
+  macOS keeps that sign-in in the Keychain, so there it shows nothing. OpenCode Go's uses the
+  provider's own API key. Both are undocumented endpoints; if one cannot be read the bots run as
+  before, and the last reading holds until its window resets.
+
 ## Not included
 
 Codync's voice calls, remote screen, relay and phone pairing, push notifications through a relay,
@@ -156,5 +179,6 @@ infrastructure and are not part of this mode.
 `scripts/chat_e2e.py` starts the mock model server and a daemon and exercises replies, read marks,
 retry, reactions, threads, group rooms and mentions, approval cards, `ask_bot`, Stop and deletion,
 and an external agent's permission requests (against `scripts/fake_acp_agent.py`, a stand-in for
-Claude Code) as cards, automatic approval and expiry (`cargo build -p silver` first). It needs no
-network or credentials.
+Claude Code) as cards, automatic approval and expiry, and the usage limits (against the mock's
+stand-in for OpenCode Go's endpoint): the reading on each reply, the stop at 90%, the hold and the
+restart (`cargo build -p silver` first). It needs no network or credentials.

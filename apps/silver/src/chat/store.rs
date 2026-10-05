@@ -3,7 +3,9 @@
 
 use crate::db::{Db, DbResult};
 use serde::{Deserialize, Serialize};
-use silver_protocol::chat::{BotKind, ChatEntry, EntryKind, PermissionView, ThreadSummary};
+use silver_protocol::chat::{
+    BotKind, ChatEntry, EntryKind, LimitWindow, PermissionView, ThreadSummary,
+};
 use silver_protocol::{RunId, SessionId, WorkspaceId};
 use std::collections::HashMap;
 use tokio_rusqlite::rusqlite::{self, params, params_from_iter, OptionalExtension};
@@ -36,6 +38,8 @@ struct EntryData {
     reactions: Vec<String>,
     #[serde(default)]
     permission: Option<PermissionView>,
+    #[serde(default)]
+    limits: Vec<LimitWindow>,
 }
 
 /// What a roster row shows besides the bot itself.
@@ -103,12 +107,18 @@ fn entry_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ChatEntry> {
         reactions: data.reactions,
         thread: None,
         permission: data.permission,
+        limits: data.limits,
         created_at: row.get(14)?,
     })
 }
 
 fn entry_data(entry: &ChatEntry) -> String {
-    serde_json::json!({ "reactions": entry.reactions, "permission": entry.permission }).to_string()
+    serde_json::json!({
+        "reactions": entry.reactions,
+        "permission": entry.permission,
+        "limits": entry.limits,
+    })
+    .to_string()
 }
 
 /// `?,?,?` for an `IN` list of `count` values, starting at parameter `from`.

@@ -167,7 +167,10 @@ with `seq` (an order that pages with `before`), `thread_id` (a reply's root), `a
 `final` (false while an agent reply is being written), `status` (`queued`, `failed` or `cancelled`
 on a user message), `style` (`error`, `divider` or `request` on a notice), `reactions`, `thread`
 (`{count, last_at, authors, unread}` on a root), `permission` (an approval card) and the `run_id` and
-`session_id` that wrote it; `GET /v1/sessions/{session_id}/messages` has what that run did.
+`session_id` that wrote it; `GET /v1/sessions/{session_id}/messages` has what that run did. A bot's
+reply also has `limits`, when its provider has usage limits we can read: the windows as they were
+when it was written, the session first, each `{name, percent, resets_at}` (`percent` is 0 to 100,
+`resets_at` unix milliseconds); see [usage limits](messages.md#usage-limits).
 
 `GET /v1/chat/events` carries `data: {"type": …}` frames named like the type: `bot` (a whole bot),
 `bot_removed {id}`, `entry` (a whole entry, including a reply as it is written), `entry_removed

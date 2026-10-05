@@ -171,6 +171,11 @@ Secrets:
   password, run every string through the same `redact` scanner (so a secret embedded in a command
   string is scrubbed), cut strings longer than 4,000 characters in the middle and depth-limit
   nested values to 6 levels.
+- The Messages bots' usage limits are read with two credentials silver does not store. Claude Code's
+  OAuth access token is read from its own `.credentials.json` on each reading and sent only to
+  `api.anthropic.com`; it is never refreshed, logged or kept, because a second refresh would
+  invalidate the one Claude Code holds. OpenCode Go's reading sends the provider's API key to the
+  provider's own base URL, as its requests do.
 - Daemon logs keep the stderr writer and add size-rotated `agent.log` (INFO+) and `errors.log`
   (WARN+); every formatted line passes through `redact`.
 - tracing does not log prompts, full file contents, memory contents or tool arguments by default.

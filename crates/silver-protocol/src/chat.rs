@@ -50,6 +50,18 @@ impl BotStatus {
     }
 }
 
+/// One window of a provider's usage limit: its session (Claude Code's five hours, OpenCode Go's
+/// rolling window), its week, its month.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct LimitWindow {
+    pub name: String,
+    /// How much of the window is used, 0 to 100.
+    pub percent: f64,
+    /// When the window resets, in unix milliseconds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resets_at: Option<i64>,
+}
+
 /// One roster row. A group's `status` and `activity` are those of its busy member.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct BotView {
@@ -187,6 +199,10 @@ pub struct ChatEntry {
     pub thread: Option<ThreadSummary>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub permission: Option<PermissionView>,
+    /// The provider's usage limits when a bot's reply was written, the session window first;
+    /// empty when the provider has none we can read.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub limits: Vec<LimitWindow>,
     /// Unix milliseconds.
     pub created_at: i64,
 }

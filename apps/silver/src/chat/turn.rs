@@ -446,6 +446,9 @@ impl ChatHub {
             Err(error) => return Outcome::failed(error.to_string()),
         };
         let bot = spec.bot;
+        if let Some(reason) = self.limit_block(bot) {
+            return self.fail(spec, reason).await;
+        }
         // The bot's agent is its session's route; set it every turn so an edit takes effect. A
         // provider alone means that provider's default model, which for an agent mode is the
         // mode itself.
@@ -522,7 +525,7 @@ impl ChatHub {
     }
 
     /// A turn that could not start or carry on: say why in the chat.
-    async fn fail(&self, spec: &Spec<'_>, error: CoreError) -> Outcome {
+    async fn fail(&self, spec: &Spec<'_>, error: impl std::fmt::Display) -> Outcome {
         let message = error.to_string();
         if let Some(lane) = spec.out() {
             self.notice(lane, &message, "error").await;
@@ -801,6 +804,7 @@ impl Writer<'_, '_> {
             if said {
                 entry.text.clone_from(&reply);
                 entry.is_final = true;
+                entry.limits = hub.limits_of(self.spec.bot);
                 if let Err(error) = hub.save_entry(entry).await {
                     tracing::warn!(%error, "a reply could not be saved");
                 }
@@ -813,6 +817,7 @@ impl Writer<'_, '_> {
             entry.run_id = Some(self.run);
             entry.session_id = Some(self.spec.session.id);
             entry.text.clone_from(&reply);
+            entry.limits = hub.limits_of(self.spec.bot);
             if let Err(error) = hub.add_entry(entry).await {
                 tracing::warn!(%error, "a reply could not be saved");
             }

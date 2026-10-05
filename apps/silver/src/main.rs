@@ -155,6 +155,7 @@ async fn main() -> anyhow::Result<()> {
     chat.attach(Arc::clone(&runs));
     silver::acp::set_broker(Arc::<silver::chat::ChatHub>::clone(&chat));
     chat.recover().await?;
+    tokio::spawn(Arc::clone(&chat).watch_limits(Arc::clone(&routed)));
     let state = AppState {
         db,
         chat,
