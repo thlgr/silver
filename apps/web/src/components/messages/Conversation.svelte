@@ -11,6 +11,7 @@
   import ChatRow from './ChatRow.svelte'
   import Composer from './Composer.svelte'
   import Intro from './Intro.svelte'
+  import LimitBar from './LimitBar.svelte'
   import WorkingIndicator from './WorkingIndicator.svelte'
   import IconBack from '~icons/lucide/chevron-left'
   import IconBrain from '~icons/lucide/brain'
@@ -23,7 +24,9 @@
   const found = $derived(chat.lanes[laneKey(botId)])
   const entries = $derived(found?.entries ?? [])
   const working = $derived(bot ? workingIn(bot) : false)
-  const workspace = $derived(bot?.kind === 'agent' ? (app.workspaces.find((w) => w.id === bot.workspace_id)?.name ?? 'No workspace') : null)
+  const named = $derived(app.workspaces.find((w) => w.id === bot?.workspace_id)?.name)
+  // A bot always names its workspace; a group names the folder it was filed under, if any.
+  const workspace = $derived(bot?.kind === 'agent' || bot?.workspace_id ? (named ?? 'No workspace') : null)
   let scroller = $state()
   let content = $state()
   let pinned = true
@@ -74,6 +77,7 @@
         <span>{bot.name}</span>
         {#if workspace}<small><IconFolder />{workspace}</small>{/if}
       </button>
+      {#if bot.limits?.length}<span class="usage"><LimitBar windows={bot.limits} /></span>{/if}
       <span class="side end">
         {#if bot.workspace_id}<button type="button" class="round glass press" title="Workspace memory" aria-label="Workspace memory" onclick={onmemory}><IconBrain /></button>{/if}
         <button type="button" class="round glass press" title="Full conversation" aria-label="Full conversation" onclick={() => openTrace(botId)}><IconList /></button>
@@ -114,6 +118,8 @@
   .title span, .title small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .title small { display: inline-flex; align-items: center; gap: 4px; min-width: 0; color: var(--m-secondary); font-size: var(--text-xs); font-weight: 400; }
   .title small :global(svg) { flex: none; width: 12px; height: 12px; }
+  .usage { display: inline-flex; padding: 0 12px; border-radius: 999px; background: var(--m-bg); box-shadow: 0 4px 16px var(--m-shadow); }
+  .usage :global(.card) { left: 50%; translate: -50% 0; }
   .scroller { flex: 1; min-height: 0; overflow-y: auto; padding-top: 60px; }
   .column { width: 100%; max-width: 852px; margin: 0 auto; padding: 8px 16px 0; }
   .sep { padding: 18px 0 6px; color: var(--m-tertiary); font-size: var(--text-xs); text-align: center; }

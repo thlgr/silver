@@ -156,6 +156,11 @@ class Handler(BaseHTTPRequestHandler):
             ]}, "call_delegate_1")
         elif not has_tool_result and "shell" in lowered:
             tool("bash", {"command": "printf hi-from-bash"}, "call_shell_1")
+        elif not has_tool_result and "tailcut" in lowered:
+            # Prose in a burst, faster than a client is sent text, then a tool call that waits.
+            for word in ["Looking ", "at ", "how ", "limits ", "polls ", "that ", "endpoint."]:
+                emit({"content": word})
+            tool("bash", {"command": "printf hi-from-bash"}, "call_tail_1")
         elif not has_tool_result and "askbot" in lowered:
             # "askbot bob" has the bot put a request to the bot called bob.
             target = re.search(r"askbot ([a-z0-9]+)", lowered)

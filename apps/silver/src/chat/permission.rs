@@ -164,4 +164,8 @@ impl PermissionBroker for ChatHub {
         self.publish_bot(&bot.id).await;
         answer.await.unwrap_or(ApprovalDecision::Deny)
     }
+
+    async fn rate_limit(&self, info: Value) {
+        self.hear_claude(&info).await;
+    }
 }

@@ -1,9 +1,9 @@
-//! A bot stops, and is not started, once its provider's session limit is nearly used up. Usage
-//! windows are read every minute; each bot reply carries the reading from when it was written, and
-//! the session window is checked against [STOP_AT]. A provider we cannot read never blocks.
+//! A bot stops, and is not started, once its provider's session limit is nearly used up. Windows
+//! are read every minute (Claude's also come with its turns), kept, shown on each agent and reply,
+//! and the session window is checked against [STOP_AT]. A provider we cannot read never blocks.
 
 use super::store::{now_ms, BotRow};
-use super::{ChatHub, Lane};
+use super::{ChatHub, Lane, State};
 use crate::routed::RoutedModel;
 use anyhow::Context;
 use serde_json::Value;
@@ -82,27 +82,58 @@ fn unix_ms(time: &str) -> Option<i64> {
         .map(|time| time.timestamp_millis())
 }
 
-/// `{"five_hour": {"utilization": 35.0, "resets_at": "2026-02-06T22:00:00+00:00"}, "seven_day":
-/// {..}, "seven_day_opus": null, ..}`. The session window is required; the rest are whichever the
-/// plan has.
-fn claude_windows(body: &Value) -> anyhow::Result<Vec<LimitWindow>> {
-    let window = |key: &str, name: &str| {
+/// Claude's usage windows by the key both its usage reply and its adapter name them with, the
+/// session first.
+const CLAUDE_WINDOWS: [(&str, &str); 4] = [
+    ("five_hour", "Session"),
+    ("seven_day", "Week"),
+    ("seven_day_opus", "Week · Opus"),
+    ("seven_day_sonnet", "Week · Sonnet"),
+];
+
+/// The windows of a Claude plan that `read` finds, as a share used out of 100 and a reset in
+/// milliseconds. The session window is required; the rest are whichever the plan has.
+fn claude_plan(read: impl Fn(&str) -> Option<(f64, Option<i64>)>) -> Option<Vec<LimitWindow>> {
+    let window = |(key, name): (&str, &str)| {
+        let (percent, resets_at) = read(key)?;
         Some(LimitWindow {
             name: name.into(),
-            percent: body[key]["utilization"].as_f64()?,
-            resets_at: body[key]["resets_at"].as_str().and_then(unix_ms),
+            percent,
+            resets_at,
         })
     };
-    let session = window("five_hour", "Session")
-        .with_context(|| format!("no five_hour window in the usage reply: {}", clip(body)))?;
-    let more = [
-        ("seven_day", "Week"),
-        ("seven_day_opus", "Week · Opus"),
-        ("seven_day_sonnet", "Week · Sonnet"),
-    ];
-    Ok(std::iter::once(session)
-        .chain(more.into_iter().filter_map(|(key, name)| window(key, name)))
-        .collect())
+    let [session, more @ ..] = CLAUDE_WINDOWS;
+    Some(
+        std::iter::once(window(session)?)
+            .chain(more.into_iter().filter_map(window))
+            .collect(),
+    )
+}
+
+/// `{"five_hour": {"utilization": 35.0, "resets_at": "2026-02-06T22:00:00+00:00"}, "seven_day":
+/// {..}, "seven_day_opus": null, ..}`.
+fn claude_windows(body: &Value) -> anyhow::Result<Vec<LimitWindow>> {
+    claude_plan(|key| {
+        let window = &body[key];
+        Some((
+            window["utilization"].as_f64()?,
+            window["resets_at"].as_str().and_then(unix_ms),
+        ))
+    })
+    .with_context(|| format!("no five_hour window in the usage reply: {}", clip(body)))
+}
+
+/// The adapter's rate-limit info, sent with a turn's usage: `{"status": "allowed",
+/// "unifiedWindows": {"five_hour": {"utilization": 0.68, "resetsAt": 1791211200}, "seven_day":
+/// {..}}, ..}`. A share is out of one and a reset is in seconds.
+fn claude_rate_limit(info: &Value) -> Option<Vec<LimitWindow>> {
+    claude_plan(|key| {
+        let window = &info["unifiedWindows"][key];
+        Some((
+            (window["utilization"].as_f64()? * 1000.0).round() / 10.0,
+            window["resetsAt"].as_i64().map(|seconds| seconds * 1000),
+        ))
+    })
 }
 
 /// `{"usage": {"rolling": {"status": "ok", "percent": 1, "resetsAt": "2026-09-13T10:42:47.510Z"},
@@ -164,8 +195,12 @@ fn session(windows: &[LimitWindow]) -> Option<&LimitWindow> {
 
 impl ChatHub {
     /// Read every bot provider's usage limits once a minute, for as long as the daemon runs.
-    /// Editing a bot reads them at once.
+    /// Editing a bot reads them at once. What was read before the daemon started shows until then.
     pub async fn watch_limits(self: Arc<Self>, routed: Arc<RoutedModel>) {
+        match self.db.chat_limits().await {
+            Ok(saved) => self.state().limits.extend(saved),
+            Err(error) => tracing::warn!(%error, "the saved usage limits could not be read"),
+        }
         let mut tick = tokio::time::interval(EVERY);
         tick.set_missed_tick_behavior(MissedTickBehavior::Skip);
         loop {
@@ -213,20 +248,67 @@ impl ChatHub {
                 }
             };
             self.state().limit_errors.remove(&*provider);
-            let over = windows
-                .first()
-                .filter(|session| session.percent >= STOP_AT)
-                .map(|session| format!("Stopped: {}", describe(&provider, session)));
-            self.state().limits.insert(provider.to_string(), windows);
-            if let Some(text) = over {
-                for bot in agents
+            self.take_reading(&provider, windows, &agents).await;
+        }
+    }
+
+    /// What the Claude adapter reported of the plan's usage with a turn, the reading the usage
+    /// endpoint would give.
+    pub(super) async fn hear_claude(&self, info: &Value) {
+        let Some(windows) = claude_rate_limit(info) else {
+            return;
+        };
+        // Every usage update of a turn carries the same reading.
+        if self.state().limits.get("claude") == Some(&windows) {
+            return;
+        }
+        match self.db.chat_bots().await {
+            Ok(bots) => {
+                let agents: Vec<&BotRow> = bots
                     .iter()
-                    .filter(|bot| self.provider_of(bot) == provider)
-                {
-                    self.stop_at_limit(bot, &text).await;
-                }
+                    .filter(|bot| bot.kind == BotKind::Agent)
+                    .collect();
+                self.take_reading("claude", windows, &agents).await;
+            }
+            Err(error) => tracing::warn!(%error, "the bots could not be read for their limits"),
+        }
+    }
+
+    /// A provider's new reading: kept, shown on the bots that answer with it, and the session
+    /// window checked against [STOP_AT].
+    async fn take_reading(&self, provider: &str, windows: Vec<LimitWindow>, agents: &[&BotRow]) {
+        let over = windows
+            .first()
+            .filter(|session| session.percent >= STOP_AT)
+            .map(|session| format!("Stopped: {}", describe(provider, session)));
+        let users: Vec<&BotRow> = agents
+            .iter()
+            .copied()
+            .filter(|bot| self.provider_of(bot) == provider)
+            .collect();
+        if self.keep(provider, windows).await {
+            for bot in &users {
+                self.publish_bot(&bot.id).await;
             }
         }
+        if let Some(text) = over {
+            for bot in users {
+                self.stop_at_limit(bot, &text).await;
+            }
+        }
+    }
+
+    /// Remember a provider's latest reading, in memory and on disk; false when it is the one
+    /// already held.
+    async fn keep(&self, provider: &str, windows: Vec<LimitWindow>) -> bool {
+        if self.state().limits.get(provider) == Some(&windows) {
+            return false;
+        }
+        if let Err(error) = self.db.save_chat_limits(provider, &windows).await {
+            tracing::warn!(%error, %provider, "the usage limits could not be saved");
+        }
+        self.state().limits.insert(provider.to_string(), windows);
+        true
     }
 
     /// End what a bot is doing, and drop what waits behind it, and say why in the chat it was
@@ -263,7 +345,15 @@ impl ChatHub {
     /// The bot's provider's usage windows as last read, for a reply to carry. None once the
     /// session window has reset, until the next reading.
     pub(super) fn limits_of(&self, bot: &BotRow) -> Vec<LimitWindow> {
-        self.state()
+        self.limits_in(&self.state(), bot)
+    }
+
+    /// [Self::limits_of] for a caller that already holds the state; a group has none.
+    pub(super) fn limits_in(&self, state: &State, bot: &BotRow) -> Vec<LimitWindow> {
+        if bot.kind != BotKind::Agent {
+            return Vec::new();
+        }
+        state
             .limits
             .get(&*self.provider_of(bot))
             .filter(|windows| session(windows).is_some())
@@ -312,6 +402,26 @@ mod tests {
         assert_eq!(windows[0].resets_at, Some(1_770_415_200_000));
         // Without a session window there is nothing to stop on.
         assert!(claude_windows(&json!({ "seven_day": { "utilization": 14.0 } })).is_err());
+    }
+
+    #[test]
+    fn the_adapter_reports_the_same_windows_as_shares_of_one() {
+        // As captured from claude-agent-acp 0.85.1.
+        let info = json!({
+            "status": "allowed", "resetsAt": 1_791_211_200, "rateLimitType": "five_hour",
+            "unifiedWindows": {
+                "five_hour": { "utilization": 0.68, "resetsAt": 1_791_211_200 },
+                "seven_day": { "utilization": 0.58, "resetsAt": 1_791_417_600 },
+            },
+        });
+        let windows = claude_rate_limit(&info).unwrap();
+        let named: Vec<(&str, f64)> = windows.iter().map(|w| (&*w.name, w.percent)).collect();
+        assert_eq!(named, [("Session", 68.0), ("Week", 58.0)]);
+        assert_eq!(windows[0].resets_at, Some(1_791_211_200_000));
+        // Without a session window there is nothing to stop on.
+        let week = json!({ "unifiedWindows": { "seven_day": { "utilization": 0.58 } } });
+        assert!(claude_rate_limit(&week).is_none());
+        assert!(claude_rate_limit(&json!({ "status": "allowed" })).is_none());
     }
 
     #[test]
@@ -412,5 +522,61 @@ mod tests {
             "a window that reset holds no one"
         );
         assert!(hub.limits_of(&claude).is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_claude_turn_updates_the_claude_bots_reading() {
+        let hub = hub().await;
+        let claude = bot_on(&hub, "Claude", "claude").await;
+        let go = bot_on(&hub, "Go", "opencode-go").await;
+        let info = |used: f64| json!({ "unifiedWindows": { "five_hour": { "utilization": used, "resetsAt": 4_102_444_800_i64 } } });
+
+        hub.hear_claude(&info(0.35)).await;
+        let held = hub.bot_view(&claude.id).await.unwrap().limits;
+        assert_eq!(held.len(), 1);
+        assert_eq!((held[0].name.as_str(), held[0].percent), ("Session", 35.0));
+        assert_eq!(hub.db.chat_limits().await.unwrap()["claude"], held);
+        assert!(hub.bot_view(&go.id).await.unwrap().limits.is_empty());
+
+        hub.hear_claude(&info(0.93)).await;
+        assert!(hub
+            .limit_block(&claude)
+            .is_some_and(|reason| reason.starts_with("Not started: Claude Code is at 93%")));
+        hub.hear_claude(&json!({ "status": "allowed" })).await;
+        assert_eq!(
+            hub.bot_view(&claude.id).await.unwrap().limits[0].percent,
+            93.0
+        );
+    }
+
+    #[tokio::test]
+    async fn an_agent_row_carries_the_last_reading_and_it_is_saved() {
+        let hub = hub().await;
+        let claude = bot_on(&hub, "Claude", "claude").await;
+        let go = bot_on(&hub, "Go", "opencode-go").await;
+        let group = hub
+            .create_bot(CreateBotRequest {
+                kind: Some(BotKind::Group),
+                name: "Both".into(),
+                members: vec![claude.id.clone(), go.id.clone()],
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        let windows = vec![
+            window("Session", 35.0, Some(3_600_000)),
+            window("Week", 14.0, Some(86_400_000)),
+        ];
+
+        assert!(hub.keep("claude", windows.clone()).await);
+        assert!(
+            !hub.keep("claude", windows.clone()).await,
+            "the same reading is not news"
+        );
+
+        assert_eq!(hub.bot_view(&claude.id).await.unwrap().limits, windows);
+        assert!(hub.bot_view(&go.id).await.unwrap().limits.is_empty());
+        assert!(hub.bot_view(&group.id).await.unwrap().limits.is_empty());
+        assert_eq!(hub.db.chat_limits().await.unwrap()["claude"], windows);
     }
 }

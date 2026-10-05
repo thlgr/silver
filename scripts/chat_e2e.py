@@ -8,6 +8,7 @@ import signal
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import urllib.request
 
@@ -62,6 +63,18 @@ def said(chat, kind="agent", thread=None):
     return [e for e in entries(chat, thread) if e["kind"] == kind and e["final"]]
 
 
+def follow_entries(live, seen):
+    """Keep the latest text of each entry the live stream carries, as a client would show it,
+    and every text it ever carried, however briefly."""
+    with urllib.request.urlopen(BASE + "/v1/chat/events") as stream:
+        for line in stream:
+            if line.startswith(b"data:"):
+                event = json.loads(line[5:])
+                if event["type"] == "entry":
+                    live[event["entry"]["id"]] = event["entry"]["text"]
+                    seen.add(event["entry"]["text"])
+
+
 WORK = tempfile.mkdtemp(prefix="silver-chat-e2e-")
 
 
@@ -77,7 +90,8 @@ def main():
         )
     with open(os.path.join(config, "secrets.env"), "w") as f:
         f.write("SILVER_API_KEY=dummy\n")
-    env = {**os.environ, "SILVER_CONFIG_DIR": config}
+    # No Claude Code sign-in here, so the daemon never asks Anthropic for a reading.
+    env = {**os.environ, "SILVER_CONFIG_DIR": config, "CLAUDE_CONFIG_DIR": os.path.join(work, "claude")}
     procs = [
         subprocess.Popen([sys.executable, os.path.join(ROOT, "scripts/mock_openai_server.py"), str(MOCK_PORT)]),
         subprocess.Popen(
@@ -172,6 +186,18 @@ def scenarios():
     until("coder done", idle("Coder"))
     assert next(e for e in entries(coder) if e["kind"] == "permission")["permission"]["status"] == "approved"
     assert said(coder), "the run went on after the approval"
+
+    # The bubble streams all the text written before a tool call, even when the text came in a
+    # burst and the tool then keeps the bot waiting.
+    live = {}
+    seen = set()
+    threading.Thread(target=follow_entries, args=(live, seen), daemon=True).start()
+    time.sleep(0.5)
+    writer = bot("Writer", workspace_id=workspace)
+    call("POST", f"/v1/chat/bots/{writer}/send", {"text": "tailcut please"})
+    until("the card", lambda: roster()["Writer"]["status"] == "needs_input")
+    until("the whole bubble", lambda: "Looking at how limits polls that endpoint." in live.values(), 3)
+    call("DELETE", f"/v1/chat/bots/{writer}")
     call("DELETE", f"/v1/chat/bots/{coder}")
 
     # A bot on a provider with usage limits stamps them on each reply, is stopped when the session
@@ -187,6 +213,9 @@ def scenarios():
     until("a reply", lambda: said(limited))
     assert [(w["name"], w["percent"]) for w in said(limited)[0]["limits"]] == [("Session", 10), ("Week", 39), ("Month", 19)]
     assert "limits" not in said(alice)[0], "a provider with no limit to read stamps nothing"
+    # The agent's roster row carries the latest reading too, and follows it.
+    assert [(w["name"], w["percent"]) for w in roster()["Limited"]["limits"]] == [("Session", 10), ("Week", 39), ("Month", 19)]
+    assert "limits" not in roster()["Alice"]
     call("POST", f"/v1/chat/bots/{limited}/send", {"text": "please run a shell command"})
     until("the card", lambda: roster()["Limited"]["status"] == "needs_input")
     usage(95)
@@ -195,6 +224,7 @@ def scenarios():
     stopped = next(e for e in entries(limited) if e["kind"] == "notice" and e["text"].startswith("Stopped:"))
     assert "95%" in stopped["text"] and "OpenCode Go" in stopped["text"], stopped
     assert next(e for e in entries(limited) if e["kind"] == "permission")["permission"]["status"] == "expired"
+    assert roster()["Limited"]["limits"][0]["percent"] == 95
     call("POST", f"/v1/chat/bots/{limited}/send", {"text": "hello again"})
     until("held", lambda: any(e["text"].startswith("Not started:") for e in entries(limited)))
     assert len(said(limited)) == 1, "a bot at its limit does not answer"
@@ -241,6 +271,27 @@ def scenarios():
     call("DELETE", f"/v1/chat/bots/{outside}")
     call("DELETE", f"/v1/chat/bots/{trusting}")
 
+    # Claude's plan usage comes with its turns, so its bar needs no endpoint. The agent is the fake
+    # one again, standing in for the Claude adapter.
+    call("POST", "/v1/auth/claude", {"base_url": f"{sys.executable} {agent}", "activate": False})
+    claude = bot("Claude", provider="claude", workspace_id=workspace)
+    assert "limits" not in roster()["Claude"]
+    send_to(claude, "showusage")
+    until("claude's reading", lambda: roster()["Claude"].get("limits"))
+    assert [(w["name"], w["percent"]) for w in roster()["Claude"]["limits"]] == [("Session", 72), ("Week", 31)]
+    until("claude idle", idle("Claude"))
+    assert [w["percent"] for w in said(claude)[0]["limits"]] == [72, 31], "the reply carries it too"
+    call("DELETE", f"/v1/chat/bots/{claude}")
+
+    # One turn can hold several assistant messages (Claude Code sends one per step); the chat
+    # shows only the last of them, and never streams the earlier ones.
+    twain = bot("Twain", provider="claude", workspace_id=workspace)
+    send_to(twain, "twomessages please")
+    until("twain done", idle("Twain"))
+    assert [e["text"] for e in said(twain)] == ["the last message"], said(twain)
+    assert "the first message" not in seen, "an earlier message is never streamed"
+    call("DELETE", f"/v1/chat/bots/{twain}")
+
     # A member whose turn fails, such as an agent at its usage limit, shows the failure once and sits
     # out the rest of the turn; the others carry on.
     broken = bot("Broken", provider="opencode", workspace_id=workspace)
@@ -253,6 +304,10 @@ def scenarios():
     assert len(failures()) == 1, "a failing member is asked once per turn"
     assert "session limit" in failures()[0]["text"]
     assert len([e for e in said(room) if e["author"] == alice]) == 1
+    # A group is filed under a workspace like a bot, and can be moved into one or out again.
+    assert roster()["Room"].get("workspace_id") is None
+    call("PATCH", f"/v1/chat/bots/{room}", {"workspace_id": workspace})
+    assert roster()["Room"]["workspace_id"] == workspace, "a group takes a workspace"
     call("DELETE", f"/v1/chat/bots/{room}")
     call("DELETE", f"/v1/chat/bots/{broken}")
 

@@ -86,6 +86,9 @@ export const workingIn = (bot, thread = null) =>
 // ---------------------------------------------------------------- stream
 
 let stream = null
+/** The last finished reply per bot chat, thread replies included; the bot view's own
+ *  `last_message` only ever holds the main chat, not a thread. */
+const lastReply = new Map()
 
 export function startChat() {
   if (stream) return
@@ -129,24 +132,40 @@ function upsertBot(bot) {
   chat.bots[at] = bot
 }
 
+/** A reply as a one-line notification body, clipped like the server's roster preview. */
+const preview = (text) => {
+  const line = text.split(/\s+/).filter(Boolean).join(' ')
+  return line.length > 120 ? `${line.slice(0, 120)}…` : line
+}
+
 /** A desktop notification when a bot needs the user, fails or finishes while the window is not
  *  in front, as Codync's push does. A group says only when it needs you or fails: it goes idle
  *  between its members' turns. */
 function alert(before, bot) {
   if (document.hasFocus() || typeof Notification === 'undefined' || Notification.permission !== 'granted') return
+  // The reply that just landed, thread or not; the bot's own `last_message` only holds the main chat.
+  const last = lastReply.get(bot.id)
+  const reply = last && (!before.started_at || last.at >= before.started_at) ? preview(last.text) : null
   const body =
     bot.status === 'needs_input' && before.status !== 'needs_input'
       ? bot.activity || 'Needs your approval'
       : bot.status === 'error' && before.status !== 'error'
         ? bot.activity || 'Something went wrong'
         : bot.status === 'idle' && before.status === 'working' && bot.kind !== 'group'
-          ? bot.last_message
+          ? (reply ?? bot.last_message)
           : null
-  if (body) new Notification(bot.name, { body, tag: bot.id })
+  if (!body) return
+  const note = new Notification(bot.name, { body, tag: bot.id })
+  // Clicking it brings the window forward and opens the chat it is about.
+  note.onclick = () => {
+    window.focus()
+    select(bot.id)
+  }
 }
 
 function dropBot(id) {
   chat.bots = chat.bots.filter((bot) => bot.id !== id)
+  lastReply.delete(id)
   for (const key of Object.keys(chat.lanes)) {
     if (key === id || key.startsWith(`${id}/`)) delete chat.lanes[key]
     if (key === id || key.startsWith(`${id}/`)) delete chat.files[key]
@@ -155,6 +174,12 @@ function dropBot(id) {
 }
 
 function upsertEntry(entry) {
+  // Kept even for a chat that is not open, so its reply can name the notification. A thread
+  // entry also re-publishes the root it hangs off, so only a newer reply may replace the last.
+  if (entry.kind === 'agent' && entry.final && entry.text) {
+    const have = lastReply.get(entry.chat_id)
+    if (!have || entry.created_at > have.at) lastReply.set(entry.chat_id, { text: entry.text, at: entry.created_at })
+  }
   const found = chat.lanes[laneKey(entry.chat_id, entry.thread_id)]
   if (!found) return
   const { entries } = found

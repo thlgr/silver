@@ -187,6 +187,35 @@ impl Db {
         .await
     }
 
+    /// Every provider's usage windows as last read.
+    pub async fn chat_limits(&self) -> DbResult<HashMap<String, Vec<LimitWindow>>> {
+        self.call(|conn| {
+            let mut stmt = conn.prepare("SELECT provider, windows FROM provider_limits")?;
+            let rows = stmt.query_map([], |row| {
+                let windows: String = row.get(1)?;
+                Ok((
+                    row.get(0)?,
+                    serde_json::from_str(&windows).unwrap_or_default(),
+                ))
+            })?;
+            Ok(rows.collect::<rusqlite::Result<_>>()?)
+        })
+        .await
+    }
+
+    pub async fn save_chat_limits(&self, provider: &str, windows: &[LimitWindow]) -> DbResult<()> {
+        let provider = provider.to_string();
+        let windows = serde_json::to_string(windows).unwrap_or_else(|_| "[]".into());
+        self.write(move |conn| {
+            conn.execute(
+                "INSERT OR REPLACE INTO provider_limits (provider, windows) VALUES (?1, ?2)",
+                params![provider, windows],
+            )?;
+            Ok(())
+        })
+        .await
+    }
+
     /// Delete a bot with every entry of its chat and its read marks.
     pub async fn delete_chat_bot(&self, id: &str) -> DbResult<()> {
         let id = id.to_string();

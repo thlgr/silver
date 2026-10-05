@@ -1,10 +1,11 @@
-<!-- How much of the provider's usage limit was used when a bot wrote a reply: the session window as
-     a thin bar (amber near the end, red where the bot stops), and every window in a card while it
-     is hovered or focused, which is how a touch screen opens it. `up` opens the card above. -->
+<!-- How much of the provider's usage limit is used, as of a bot's reply or as last read: the session
+     window as a thin bar (amber near the end, red where the bot stops), and every window in a card
+     while it is hovered or focused, which is how a touch screen opens it. `up` opens the card
+     above. `plain` is the bar alone with the windows as its tooltip, for inside a button. -->
 <script>
   import { time } from '../../lib/when.js'
 
-  let { windows, up = false } = $props()
+  let { windows, up = false, plain = false } = $props()
   const session = $derived(windows[0])
   const percent = (window) => Math.round(Math.min(100, Math.max(0, window.percent)))
   const level = (window) => (window.percent >= 90 ? 'stop' : window.percent >= 75 ? 'warn' : '')
@@ -22,19 +23,25 @@
   <span class="track"><span class="fill" style:width="{percent(window)}%"></span></span>
 {/snippet}
 
-<button type="button" class="limit {level(session)}" aria-label="Usage limits: {session.name} {percent(session)}% used">
-  {@render track(session)}
-  <span class="card" class:up role="tooltip">
-    {#each windows as window (window.name)}
-      <span class="line {level(window)}">
-        <b>{window.name}</b>
-        {@render track(window)}
-        <i>{percent(window)}%</i>
-        <small>{resets(window)}</small>
-      </span>
-    {/each}
+{#if plain}
+  <span class="limit {level(session)}" title={windows.map((window) => `${window.name} ${percent(window)}%`).join(' · ')}>
+    {@render track(session)}
   </span>
-</button>
+{:else}
+  <button type="button" class="limit {level(session)}" aria-label="Usage limits: {session.name} {percent(session)}% used">
+    {@render track(session)}
+    <span class="card" class:up role="tooltip">
+      {#each windows as window (window.name)}
+        <span class="line {level(window)}">
+          <b>{window.name}</b>
+          {@render track(window)}
+          <i>{percent(window)}%</i>
+          <small>{resets(window)}</small>
+        </span>
+      {/each}
+    </span>
+  </button>
+{/if}
 
 <style>
   .limit { position: relative; display: inline-flex; flex: none; align-items: center; align-self: center; padding: 6px 0; border: 0; background: none; color: var(--m-secondary); font: inherit; cursor: default; }

@@ -2,6 +2,7 @@
      what the chat last said. -->
 <script>
   import BotAvatar from './BotAvatar.svelte'
+  import LimitBar from './LimitBar.svelte'
   import Orb from './Orb.svelte'
   import { day } from '../../lib/when.js'
   import IconPin from '~icons/lucide/pin'
@@ -20,6 +21,7 @@
     <span class="top">
       {#if bot.pinned}<IconPin class="pin" />{/if}
       <span class="name">{bot.name}</span>
+      {#if bot.limits?.length}<LimitBar windows={bot.limits} plain />{/if}
       <span class="when" class:fresh={bot.unread > 0}>{day(bot.last_at)}</span>
     </span>
     <span class="bottom">
@@ -33,7 +35,7 @@
         {:else if failed}
           <span>{bot.activity || bot.last_message || 'Something went wrong'}</span>
         {:else}
-          <span>{bot.last_message ?? (bot.kind === 'group' ? `${bot.members.length} bots` : 'No messages yet')}</span>
+          <span>{bot.last_message ?? (bot.kind === 'group' ? `${bot.members.length} ${bot.members.length === 1 ? 'bot' : 'bots'}` : 'No messages yet')}</span>
         {/if}
       </span>
       {#if bot.unread > 0}<span class="unread">{bot.unread}</span>{/if}
