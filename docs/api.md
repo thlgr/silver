@@ -127,6 +127,7 @@ Keep-alive is an SSE comment every 15 s.
 | `run.queued` | yes | Run accepted, with session and workspace |
 | `run.started` | yes | Model and start time |
 | `context.updated` | yes | How full the context budget is for the request about to go out; repeated with `prompt_tokens` once the provider has counted |
+| `text.started` | yes | An external agent (Claude Code) began a new message; the text streamed before it is superseded, so only its last message is the reply |
 | `text.delta` | no | Incremental assistant text |
 | `reasoning.delta` | no | Incremental model reasoning; clients show a thinking row and drop it when text or a tool call begins |
 | `text.completed` | yes | Final assistant text |
@@ -171,7 +172,8 @@ on a user message), `style` (`error`, `divider` or `request` on a notice), `reac
 `session_id` that wrote it; `GET /v1/sessions/{session_id}/messages` has what that run did. A bot's
 reply also has `limits`, when its provider has usage limits we can read: the windows as they were
 when it was written, the session first, each `{name, percent, resets_at}` (`percent` is 0 to 100,
-`resets_at` unix milliseconds); see [usage limits](messages.md#usage-limits).
+`resets_at` unix milliseconds). An agent's own row has `limits` too: the latest reading. See
+[usage limits](messages.md#usage-limits).
 
 `GET /v1/chat/events` carries `data: {"type": …}` frames named like the type: `bot` (a whole bot),
 `bot_removed {id}`, `entry` (a whole entry, including a reply as it is written), `entry_removed

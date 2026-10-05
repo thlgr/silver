@@ -2,7 +2,7 @@
 //! It runs its own loop and tools; only its prose returns. Sessions are keyed by
 //! [ModelRequest::cache_key], so each turn sends only the newest message.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::process::Stdio;
 use std::sync::{Arc, OnceLock, PoisonError};
 
@@ -35,10 +35,14 @@ pub struct PermissionRequest {
     pub input: Value,
 }
 
-/// Whoever can put a permission request to the user. Without one every request is refused.
+/// Whoever can put a permission request to the user, and hear what an agent says of its plan's
+/// usage. Without one every request is refused and the usage goes unheard.
 #[async_trait]
 pub trait PermissionBroker: Send + Sync {
     async fn decide(&self, request: PermissionRequest) -> ApprovalDecision;
+
+    /// The Claude adapter's rate-limit info, which comes with each turn's usage.
+    async fn rate_limit(&self, _info: Value) {}
 }
 
 static BROKER: OnceLock<Arc<dyn PermissionBroker>> = OnceLock::new();
@@ -51,8 +55,8 @@ pub fn set_broker(broker: Arc<dyn PermissionBroker>) {
 /// One streamed update from the agent.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AcpUpdate {
-    /// Prose for the user.
-    Message(String),
+    /// Prose for the user, with the message it belongs to when the agent names one.
+    Message { text: String, id: Option<String> },
     /// The agent's own thinking.
     Thought(String),
     /// Tool activity inside the external agent, surfaced so the turn is not silent.
@@ -66,7 +70,13 @@ pub fn map_session_update(params: &Value) -> Option<AcpUpdate> {
     let update = params.get("update")?;
     let kind = update.get("sessionUpdate").and_then(Value::as_str)?;
     match kind {
-        "agent_message_chunk" => text_of(update).map(AcpUpdate::Message),
+        "agent_message_chunk" => text_of(update).map(|text| AcpUpdate::Message {
+            text,
+            id: update
+                .get("messageId")
+                .and_then(Value::as_str)
+                .map(str::to_string),
+        }),
         "agent_thought_chunk" => text_of(update).map(AcpUpdate::Thought),
         "tool_call" | "tool_call_update" => {
             let title = update
@@ -145,7 +155,7 @@ impl Connection {
                 if line.is_empty() {
                     continue;
                 }
-                let Ok(value) = serde_json::from_str::<Value>(line) else {
+                let Ok(mut value) = serde_json::from_str::<Value>(line) else {
                     continue;
                 };
                 // A request (method and id) must be answered or the agent waits forever. It is
@@ -161,6 +171,15 @@ impl Connection {
                             .unwrap_or_default();
                         if let Some(update) = value.get("params").and_then(map_session_update) {
                             conn.emit(session, update);
+                        } else if let (Some(broker), Some(info)) = (
+                            &conn.broker,
+                            value
+                                .pointer_mut("/params/update/_meta")
+                                .and_then(|meta| meta.get_mut("_claude/rateLimit"))
+                                .map(Value::take),
+                        ) {
+                            let broker = Arc::clone(broker);
+                            tokio::spawn(async move { broker.rate_limit(info).await });
                         }
                     }
                     continue;
@@ -599,6 +618,8 @@ impl Model for AcpProvider {
             connection: Arc::clone(&connection),
             session: session_id.clone(),
             finished: false,
+            pending: VecDeque::new(),
+            message: None,
         };
         tokio::spawn(async move {
             let outcome = connection
@@ -632,6 +653,10 @@ struct Turn {
     connection: Arc<Connection>,
     session: String,
     finished: bool,
+    /// Events made from one update, waiting their turn (an assistant text starts before its delta).
+    pending: VecDeque<ModelStreamEvent>,
+    /// The assistant message the agent is writing, so a new one is told apart from its chunks.
+    message: Option<String>,
 }
 
 impl Turn {
@@ -639,6 +664,9 @@ impl Turn {
     /// after the agent answered, not when the answer arrives, so text sent just before it is never
     /// lost; only a failed prompt, or a cancel, ends it early.
     async fn next(&mut self) -> Option<CoreResult<ModelStreamEvent>> {
+        if let Some(event) = self.pending.pop_front() {
+            return Some(Ok(event));
+        }
         if self.finished {
             return None;
         }
@@ -674,7 +702,19 @@ impl Turn {
                 },
                 update = self.updates.recv() => {
                     let event = match update {
-                        Some(AcpUpdate::Message(text)) => ModelStreamEvent::TextDelta(text),
+                        Some(AcpUpdate::Message { text, id }) => {
+                            // A new message id is a new assistant message: tell the client so it
+                            // drops the one before instead of showing them run together.
+                            let started = id.is_some() && id != self.message;
+                            if id.is_some() {
+                                self.message = id;
+                            }
+                            if started {
+                                self.pending.push_back(ModelStreamEvent::TextDelta(text));
+                                return Some(Ok(ModelStreamEvent::TextStarted));
+                            }
+                            ModelStreamEvent::TextDelta(text)
+                        }
                         Some(AcpUpdate::Thought(text) | AcpUpdate::ToolActivity(text)) => {
                             ModelStreamEvent::ReasoningDelta(text)
                         }
@@ -723,6 +763,19 @@ mod tests {
             );
             assert_eq!(request.title, "Write x");
             self.0
+        }
+    }
+
+    struct Hears(mpsc::UnboundedSender<Value>);
+
+    #[async_trait]
+    impl PermissionBroker for Hears {
+        async fn decide(&self, _request: PermissionRequest) -> ApprovalDecision {
+            ApprovalDecision::Deny
+        }
+
+        async fn rate_limit(&self, info: Value) {
+            self.0.send(info).unwrap();
         }
     }
 
@@ -776,6 +829,30 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn the_claude_adapters_rate_limit_reaches_the_broker() {
+        let (mut agent, client) = tokio::io::duplex(4096);
+        let (heard, mut rate_limits) = mpsc::unbounded_channel();
+        let broker = Arc::new(Hears(heard)) as Arc<dyn PermissionBroker>;
+        let _connection = Connection::new(client, tokio::io::sink(), Some(broker));
+        let usage = |meta: Value| {
+            let update =
+                json!({ "sessionUpdate": "usage_update", "used": 9, "size": 99, "_meta": meta });
+            let frame = json!({ "jsonrpc": "2.0", "method": "session/update",
+                "params": { "sessionId": "a", "update": update } });
+            format!("{frame}\n")
+        };
+        let info = json!({ "status": "allowed", "unifiedWindows": { "five_hour": { "utilization": 0.5 } } });
+
+        for frame in [
+            usage(json!({ "_claude/model": "claude-sonnet-5-5" })),
+            usage(json!({ "_claude/rateLimit": info })),
+        ] {
+            agent.write_all(frame.as_bytes()).await.unwrap();
+        }
+        assert_eq!(rate_limits.recv().await, Some(info));
+    }
+
+    #[tokio::test]
     async fn a_failed_prompt_is_never_taken_for_a_finished_one() {
         // The queue is closed and the failure is waiting: both are ready, and either order used
         // to be possible.
@@ -791,9 +868,55 @@ mod tests {
                 connection: Connection::new(tokio::io::empty(), tokio::io::sink(), None),
                 session: "a".into(),
                 finished: false,
+                pending: VecDeque::new(),
+                message: None,
             };
             assert!(matches!(turn.next().await, Some(Err(_))));
         }
+    }
+
+    #[tokio::test]
+    async fn a_new_assistant_message_starts_before_its_text() {
+        // Claude Code sends each assistant message with its own id; only the last is the reply.
+        let (sender, updates) = mpsc::unbounded_channel();
+        let mut turn = Turn {
+            updates,
+            answer: None,
+            cancel: CancellationToken::new(),
+            connection: Connection::new(tokio::io::empty(), tokio::io::sink(), None),
+            session: "a".into(),
+            finished: false,
+            pending: VecDeque::new(),
+            message: None,
+        };
+        let chunk = |id: &str, text: &str| AcpUpdate::Message {
+            text: text.into(),
+            id: Some(id.into()),
+        };
+        for update in [
+            chunk("m1", "one "),
+            chunk("m1", "message"),
+            chunk("m2", "the last"),
+        ] {
+            sender.send(update).unwrap();
+        }
+        drop(sender);
+
+        let mut events = Vec::new();
+        while let Some(event) = turn.next().await {
+            events.push(event.unwrap());
+        }
+        // The first message announces itself before its text, as does the second; only the ids
+        // the agent names get a start, so a chat can wait for the last message.
+        assert!(matches!(events[0], ModelStreamEvent::TextStarted));
+        assert!(matches!(&events[1], ModelStreamEvent::TextDelta(text) if text == "one "));
+        assert!(matches!(&events[2], ModelStreamEvent::TextDelta(text) if text == "message"));
+        assert!(matches!(events[3], ModelStreamEvent::TextStarted));
+        assert!(matches!(&events[4], ModelStreamEvent::TextDelta(text) if text == "the last"));
+        assert!(matches!(
+            events[5],
+            ModelStreamEvent::Finish(FinishReason::Stop)
+        ));
     }
 
     #[tokio::test]
@@ -813,7 +936,7 @@ mod tests {
             agent.write_all(frame.as_bytes()).await.unwrap();
         }
         let text = |update| match update {
-            Some(AcpUpdate::Message(text)) => text,
+            Some(AcpUpdate::Message { text, .. }) => text,
             _ => panic!("expected a message"),
         };
         assert_eq!(text(first_updates.recv().await), "for a");

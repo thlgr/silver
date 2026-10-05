@@ -2346,6 +2346,13 @@ impl Agent {
             };
             match item {
                 Err(err) => return Err(self.stream_error(&err, emitted, control, &response.text)),
+                Ok(ModelStreamEvent::TextStarted) => {
+                    // An external agent's message boundary: what it said before is not this
+                    // turn's reply, so it must not reach the transcript or the chat.
+                    response.text.clear();
+                    events.emit(EventPayload::TextStarted);
+                    clock.touch();
+                }
                 Ok(ModelStreamEvent::TextDelta(delta)) => {
                     emitted = true;
                     response.text.push_str(&delta);

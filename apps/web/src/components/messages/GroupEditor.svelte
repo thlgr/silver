@@ -1,16 +1,20 @@
-<!-- Create a group chat or change one: a name, what the room is for, and which bots are in it. -->
+<!-- Create a group chat or change one: a name, what the room is for, which bots are in it, and the
+     workspace it is filed under. -->
 <script>
+  import { app } from '../../lib/state.svelte.js'
   import { chat, deleteBot, saveBot, select } from '../../lib/chat.svelte.js'
   import Avatar from './Avatar.svelte'
+  import Choice from './Choice.svelte'
   import Dialog from './Dialog.svelte'
   import Sheet from './Sheet.svelte'
   import IconCheck from '~icons/lucide/check'
 
   let { group = null, onclose } = $props()
   const agents = $derived(chat.bots.filter((bot) => bot.kind === 'agent'))
+  const workspaces = $derived([{ value: '', label: 'None' }, ...app.workspaces.map((w) => ({ value: w.id, label: w.name }))])
   // The form starts from the bot it was opened with and is not re-seeded while open.
   // svelte-ignore state_referenced_locally
-  const draft = $state({ name: group?.name ?? '', description: group?.description ?? '', members: [...(group?.members ?? [])] })
+  const draft = $state({ name: group?.name ?? '', description: group?.description ?? '', members: [...(group?.members ?? [])], workspace_id: group ? (group.workspace_id ?? '') : (app.scope ?? app.workspaces[0]?.id ?? '') })
   let saving = $state(false)
   let ask = $state(null)
   const valid = $derived(draft.name.trim() && draft.members.length > 0)
@@ -20,7 +24,9 @@
   async function save() {
     if (!valid || saving) return
     saving = true
-    const saved = await saveBot(group?.id ?? null, { ...draft, name: draft.name.trim(), kind: group ? undefined : 'group' })
+    // A new group may carry no workspace ("" would not parse); an existing one sends "" to clear it.
+    const workspace_id = group ? draft.workspace_id : draft.workspace_id || undefined
+    const saved = await saveBot(group?.id ?? null, { ...draft, name: draft.name.trim(), kind: group ? undefined : 'group', workspace_id })
     saving = false
     if (!saved) return
     if (!group) select(saved.id)
@@ -37,6 +43,7 @@
   <div class="card">
     <label class="row"><span>Name</span><input placeholder="e.g. Release crew" maxlength="60" bind:value={draft.name} /></label>
     <label class="col"><span>About</span><textarea rows="2" placeholder="What this room is for. Its bots read it." bind:value={draft.description}></textarea></label>
+    <Choice label="Workspace" value={draft.workspace_id} options={workspaces} onchange={(id) => (draft.workspace_id = id)} />
   </div>
 
   <h3 class="card-title">Bots</h3>

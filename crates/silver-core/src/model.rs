@@ -113,6 +113,9 @@ pub enum FinishReason {
 
 #[derive(Clone, Debug)]
 pub enum ModelStreamEvent {
+    /// The model began a new text message; text already streamed is superseded. External
+    /// agents report one message per assistant turn, only the last of which is the reply.
+    TextStarted,
     TextDelta(String),
     ReasoningDelta(String),
     ToolCallDelta {

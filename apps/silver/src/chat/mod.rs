@@ -217,7 +217,8 @@ impl ChatHub {
         rows.into_iter()
             .map(|row| {
                 let stats = stats.get(&row.id);
-                view(row, &names, &state.runtime, stats)
+                let limits = self.limits_in(&state, &row);
+                view(row, &names, &state.runtime, stats, limits)
             })
             .collect()
     }
@@ -348,24 +349,24 @@ impl ChatHub {
             if let Some(yolo) = request.yolo {
                 row.yolo = yolo;
             }
-            if let Some(workspace) = request.workspace_id {
-                let workspace = match non_blank(Some(workspace)) {
-                    Some(raw) => {
-                        let parsed =
-                            raw.parse()
-                                .map_err(|error: silver_protocol::IdParseError| {
-                                    invalid(error.to_string())
-                                })?;
-                        self.workspace(parsed).await?;
-                        Some(parsed)
-                    }
-                    None => None,
-                };
-                // A session never changes folder, so a new folder starts a new session.
-                if workspace != row.workspace_id {
-                    row.workspace_id = workspace;
-                    row.epoch += 1;
+        }
+        if let Some(workspace) = request.workspace_id {
+            let workspace = match non_blank(Some(workspace)) {
+                Some(raw) => {
+                    let parsed = raw
+                        .parse()
+                        .map_err(|error: silver_protocol::IdParseError| {
+                            invalid(error.to_string())
+                        })?;
+                    self.workspace(parsed).await?;
+                    Some(parsed)
                 }
+                None => None,
+            };
+            // A session never changes folder, so a new folder starts a new session.
+            if workspace != row.workspace_id {
+                row.workspace_id = workspace;
+                row.epoch += 1;
             }
         }
         self.db.save_chat_bot(row).await?;
@@ -708,6 +709,7 @@ fn view(
     names: &HashMap<String, String>,
     runtime: &HashMap<String, Runtime>,
     stats: Option<&BotStats>,
+    limits: Vec<LimitWindow>,
 ) -> BotView {
     let name_of = |id: &str| names.get(id).map_or("Bot", String::as_str);
     let (live, speaker) = match row.kind {
@@ -750,6 +752,7 @@ fn view(
         last_message,
         last_at: last.map_or(row.created_at, |(_, _, _, at)| *at),
         unread: stats.map_or(0, |stats| stats.unread),
+        limits,
         id: row.id,
         kind: row.kind,
         name: row.name,

@@ -512,12 +512,21 @@ impl ChatHub {
             reply: None,
             cards: HashMap::new(),
             error: None,
+            unsent: false,
+            live: true,
             last_emit: Instant::now(),
             last_thought: Instant::now(),
         };
-        while let Some(event) = subscription.next().await {
-            if writer.apply(event.payload).await {
-                break;
+        loop {
+            tokio::select! {
+                biased;
+                () = tokio::time::sleep_until(writer.flush_at()), if writer.unsent => writer.flush(),
+                event = subscription.next() => {
+                    let Some(event) = event else { break };
+                    if writer.apply(event.payload).await {
+                        break;
+                    }
+                }
             }
         }
         writer.finish().await
@@ -615,6 +624,11 @@ struct Writer<'a, 'b> {
     reply: Option<String>,
     cards: HashMap<ApprovalId, ChatEntry>,
     error: Option<String>,
+    /// The segment has text clients were not sent yet, to keep to `STREAM_EVERY`.
+    unsent: bool,
+    /// Whether the reply is shown as it is written. Cleared when the agent names its messages,
+    /// so the chat shows only its last one rather than each of them as it streams.
+    live: bool,
     last_emit: Instant,
     last_thought: Instant,
 }
@@ -623,6 +637,12 @@ impl Writer<'_, '_> {
     /// Handle one event. True once the run is over.
     async fn apply(&mut self, event: EventPayload) -> bool {
         match event {
+            EventPayload::TextStarted => {
+                // The agent names each message it writes, so the turn holds several; only the
+                // last is the reply, and it is shown whole when the turn ends.
+                self.live = false;
+                self.segment.clear();
+            }
             EventPayload::TextDelta { delta } => self.delta(&delta).await,
             EventPayload::TextCompleted { text } => self.reply = Some(text),
             EventPayload::ReasoningDelta { delta } => self.thought(&delta).await,
@@ -699,6 +719,11 @@ impl Writer<'_, '_> {
         if self.spec.pass && maybe_pass(&self.segment) {
             return;
         }
+        // An agent that names each message writes several in a turn and only the last is kept,
+        // so showing the text as it is written would show all the ones before it too.
+        if !self.live {
+            return;
+        }
         if self.entry.is_none() {
             let mut entry = new_entry(&lane.chat, lane.thread.as_deref(), EntryKind::Agent);
             entry.author = Some(self.spec.bot.id.clone());
@@ -711,12 +736,23 @@ impl Writer<'_, '_> {
                 Err(error) => tracing::warn!(%error, "a reply could not be saved"),
             }
             self.last_emit = Instant::now();
-        } else if self.last_emit.elapsed() >= STREAM_EVERY {
-            self.last_emit = Instant::now();
-            if let Some(entry) = &mut self.entry {
-                entry.text.clone_from(&self.segment);
-                self.hub.stream_entry(entry);
-            }
+        } else {
+            self.unsent = true;
+        }
+    }
+
+    /// When the text held back is due, so it is not left stale if no more arrives, as while a
+    /// tool runs.
+    fn flush_at(&self) -> tokio::time::Instant {
+        tokio::time::Instant::from_std(self.last_emit + STREAM_EVERY)
+    }
+
+    fn flush(&mut self) {
+        self.unsent = false;
+        self.last_emit = Instant::now();
+        if let Some(entry) = &mut self.entry {
+            entry.text.clone_from(&self.segment);
+            self.hub.stream_entry(entry);
         }
     }
 

@@ -106,6 +106,10 @@ pub struct BotView {
     pub last_message: Option<String>,
     pub last_at: i64,
     pub unread: u32,
+    /// An agent's provider's usage limits as last read, the session window first; empty when it
+    /// has none we can read, or the session has reset since.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub limits: Vec<LimitWindow>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]

@@ -22,13 +22,16 @@ A bot is a persistent, named teammate with its own chat:
 | permissions | *Ask me* (silver's normal approvals) or *Approve automatically* |
 | instructions | Standing instructions, given to the bot on every turn |
 
-The roster lists bots under the workspace they work in, in the workbench's order, then the bots
-with no workspace, then groups; within each, pinned first, then the newest conversation. Every
-workspace shows, even one with no bots yet, and the **+** beside its name creates a bot there (the
-roster's own **+ → New bot** starts in the workbench's current workspace). The conversation's title
-names the bot's workspace, and the details panel and an empty chat show its path. Change a bot from
-the details panel's gear, and pin, edit or delete it from the roster's context menu. Removing a
-workspace in the workbench leaves its bots without one.
+The roster lists bots and groups under the workspace they belong to, in the workbench's order, then
+those with no workspace; within each, pinned first, then the newest conversation. Every workspace
+shows, even one with nothing in it yet, and the **+** beside its name creates a bot there (the
+roster's own **+ → New bot** starts in the workbench's current workspace). A group is filed under
+the workspace picked in its editor, or under **No workspace**; the same menu's **+ → New workspace**
+registers a folder from the Messages window too (typed by path when silver cannot open the machine's
+folder dialog). The conversation's title names the workspace, and the details panel and an empty
+chat show its path. Change a bot from the details panel's gear, and pin, edit or delete it from the
+roster's context menu. The **⋯** beside a workspace's name removes it, as the workbench can: its
+bots and groups move to **No workspace** and the files stay on disk.
 
 ### How a bot runs
 
@@ -105,7 +108,8 @@ write memory themselves as they work.
   the command and **Allow once / Always allow / Deny**. A question the bot asks you is the same
   card with its options. The roster row turns amber while a bot waits for you.
 - When the window is not in front, the browser can notify you when a bot needs you, fails or
-  finishes. It asks for permission the first time you send a message.
+  finishes; clicking the notification opens that bot's chat. It asks for permission the first time
+  you send a message.
 - Bots with a workspace take files: the paperclip, dropping files anywhere in the window, or
   pasting an image stores them under `.silver/attachments/` and names them in the message, as
   in the workbench.
@@ -149,12 +153,15 @@ A bot's agent is whatever provider you pick for it, so Messages is not tied to s
 - Each bot's agent session starts in the bot's workspace, several bots can share one agent at once,
   and such a bot can be asked by other bots and join groups like any other.
 
-An external agent keeps its own loop and tools; silver relays what it says. When it asks leave to
-act (to edit a file, run a command), the request is an **approval card** in the bot's chat: *Allow
-once*, *Always allow* or *Deny*. A bot set to *Approve automatically* says yes itself. A card left
-open when the turn ends, by Stop or otherwise, expires and the agent is told no. Stopping a turn
-also tells the agent to stop. Silver's own tools and the team tools are not the agent's, so
-`ask_bot` is not available to it, and "Full conversation" shows its tool activity as text.
+An external agent keeps its own loop and tools; silver relays what it says. A turn that holds
+several of the agent's messages — Claude Code writes one per step — shows only the last in the
+chat, which lands whole when the turn ends: the earlier messages are the agent's running commentary,
+not the reply, and are not streamed into the bubble. When it asks leave to act (to edit a file, run
+a command), the request is an **approval card** in the bot's chat: *Allow once*, *Always allow* or
+*Deny*. A bot set to *Approve automatically* says yes itself. A card left open when the turn ends,
+by Stop or otherwise, expires and the agent is told no. Stopping a turn also tells the agent to
+stop. Silver's own tools and the team tools are not the agent's, so `ask_bot` is not available to
+it, and "Full conversation" shows its tool activity as text.
 
 A bot using one with no workspace works in the directory silver was started in; give it a workspace.
 
@@ -166,20 +173,29 @@ the cap fails half way through its work. Silver reads those limits so it can sto
 - **Which.** A bot whose agent is **Claude Code** reads the five-hour *session*, *week* and the
   per-model weeks the plan has; one on the **OpenCode Go** provider reads its *session* (rolling),
   *week* and *month*. Other agents have nothing we can read: no bar, never held.
-- **On the message.** Each reply carries the limits as they were when it was written: a thin bar for
-  the session, beside the bot's name in a group chat and beside the time in a bot's own chat, amber
-  from 75% and red from 90%. Hover it (tap it on a touch screen) for every window, with how much is
-  used and when it resets. Older replies keep the reading they were written with.
+- **Beside the agent.** The latest reading is a thin bar for the session, amber from 75% and red
+  from 90%, always shown beside an agent's name in the chat header and in the roster. Hover it (tap
+  it on a touch screen) for every window, with how much is used and when it resets; in the roster
+  the windows are its tooltip. A group has none: its members' bars are on their replies.
+- **On the message.** Each reply carries the limits as they were when it was written, as the same
+  bar beside the bot's name in a group chat and beside the time in a bot's own chat. Older replies
+  keep the reading they were written with.
 - **At 90%.** A bot whose session is at 90% or more is not started: the message gets a *Not
   started* notice with the reset time. A turn already running is stopped, what was queued behind it
   is dropped, and the chat says *Stopped*. In a group the bot sits out like any member whose turn
   failed. Only the session window decides, and the line is fixed.
 - **How it is read.** Once a minute, and at once when a bot is created or edited, for each provider
   the bots use. Claude's reading uses the sign-in file Claude Code keeps (`~/.claude/.credentials.json`,
-  or under `CLAUDE_CONFIG_DIR`), so it needs Claude Code signed in on the machine silver runs on;
-  macOS keeps that sign-in in the Keychain, so there it shows nothing. OpenCode Go's uses the
-  provider's own API key. Both are undocumented endpoints; if one cannot be read the bots run as
-  before, and the last reading holds until its window resets.
+  or under `CLAUDE_CONFIG_DIR`), so it needs Claude Code signed in on the machine silver runs on.
+  OpenCode Go's uses the provider's own API key. Both are undocumented endpoints, and Anthropic's
+  answers some accounts with `429` every time. So Claude's windows also come with each turn a Claude
+  bot runs, as its adapter reports them. That does not read the sign-in file, so on macOS, where the
+  sign-in is in the Keychain, it is the only source, but it updates the bar only while a Claude bot
+  works. If a reading cannot be had the bots run as before, and the last reading holds until its
+  window resets.
+- **Kept.** Each new reading is saved (`provider_limits`, migration `0004`), so after a restart
+  the bars and the 90% line stand on the last reading until the next one, and the bar stays while
+  the endpoint refuses to answer. A session window that has reset since is not shown.
 
 ## Not included
 
@@ -193,5 +209,6 @@ infrastructure and are not part of this mode.
 retry, reactions, threads, group rooms and mentions, approval cards, `ask_bot`, Stop and deletion,
 and an external agent's permission requests (against `scripts/fake_acp_agent.py`, a stand-in for
 Claude Code) as cards, automatic approval and expiry, and the usage limits (against the mock's
-stand-in for OpenCode Go's endpoint): the reading on each reply, the stop at 90%, the hold and the
-restart (`cargo build -p silver` first). It needs no network or credentials.
+stand-in for OpenCode Go's endpoint, and the fake agent's report of a Claude plan's usage): the
+reading on each reply, the stop at 90%, the hold and the restart (`cargo build -p silver` first).
+It needs no network or credentials.

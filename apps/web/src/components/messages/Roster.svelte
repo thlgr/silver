@@ -1,11 +1,13 @@
-<!-- The roster: bots under the workspace they work in, then those without one, then groups; in
+<!-- The roster: bots and groups under the workspace they belong to, then those without one; in
      each, pinned on top, then the newest conversation. -->
 <script>
-  import { app } from '../../lib/state.svelte.js'
+  import { app, addWorkspace, removeWorkspace } from '../../lib/state.svelte.js'
+  import { api } from '../../lib/api.js'
   import { chat, deleteBot, markRead, newSession, roster, select, setPinned } from '../../lib/chat.svelte.js'
   import BotRow from './BotRow.svelte'
   import Menu from './Menu.svelte'
   import Dialog from './Dialog.svelte'
+  import Sheet from './Sheet.svelte'
   import IconSearch from '~icons/lucide/search'
   import IconPlus from '~icons/lucide/plus'
   import IconPin from '~icons/lucide/pin'
@@ -21,19 +23,23 @@
   import IconSettings from '~icons/lucide/settings'
   import IconFolder from '~icons/lucide/folder'
   import IconFolderX from '~icons/lucide/folder-x'
+  import IconFolderPlus from '~icons/lucide/folder-plus'
+  import IconCheck from '~icons/lucide/check'
+  import IconMore from '~icons/lucide/ellipsis'
 
   let menu = $state(null) // { x, y, items }
   let ask = $state(null) // a Dialog's props
-  // Workspaces keep the workbench's order. One without bots still shows, so a bot can be started
-  // there, except while searching.
+  let folder = $state(null) // a new workspace being added: { path, name, problem }
+  const focus = (node) => node.focus()
+  // Workspaces keep the workbench's order. One without bots or groups still shows, so a bot can be
+  // started there, except while searching. Groups sit in the workspace they were given.
   const sections = $derived.by(() => {
     const all = roster()
-    const agents = all.filter((bot) => bot.kind === 'agent')
     const searching = chat.query.trim() !== ''
+    const inWorkspace = (id) => all.filter((bot) => bot.workspace_id === id)
     return [
-      ...app.workspaces.map((w) => ({ key: w.id, name: w.name, path: w.path, icon: IconFolder, add: `New bot in ${w.name}`, editor: { bot: null, workspace: w.id }, bots: agents.filter((bot) => bot.workspace_id === w.id) })),
-      { key: 'none', name: 'No workspace', icon: IconFolderX, add: 'New bot without a workspace', editor: { bot: null, workspace: '' }, bots: agents.filter((bot) => !app.workspaces.some((w) => w.id === bot.workspace_id)) },
-      { key: 'groups', name: 'Groups', icon: IconUsers, add: 'New group chat', editor: { group: null }, bots: all.filter((bot) => bot.kind === 'group') },
+      ...app.workspaces.map((w) => ({ key: w.id, name: w.name, path: w.path, icon: IconFolder, add: `New bot in ${w.name}`, editor: { bot: null, workspace: w.id }, bots: inWorkspace(w.id) })),
+      { key: 'none', name: 'No workspace', icon: IconFolderX, add: 'New bot without a workspace', editor: { bot: null, workspace: '' }, bots: all.filter((bot) => !app.workspaces.some((w) => w.id === bot.workspace_id)) },
     ].filter((section) => section.bots.length || (section.path && !searching))
   })
   const rows = $derived(sections.flatMap((section) => section.bots))
@@ -60,6 +66,24 @@
     menu = { x: event.clientX, y: event.clientY, items }
   }
 
+  // The folder header's menu: a workspace can leave the roster without deleting a bot.
+  function sectionMenu(event, section) {
+    event.preventDefault()
+    const box = event.currentTarget.getBoundingClientRect()
+    menu = {
+      x: box.left,
+      y: box.bottom + 4,
+      items: [
+        {
+          label: 'Remove workspace',
+          icon: IconTrash,
+          danger: true,
+          run: () => (ask = { title: `Remove ${section.name}?`, message: 'The folder stays on disk. Its bots and groups move to No workspace.', danger: true, action: { label: 'Remove', run: () => removeWorkspace(section.key) } }),
+        },
+      ],
+    }
+  }
+
   function newMenu(event) {
     const box = event.currentTarget.getBoundingClientRect()
     menu = {
@@ -69,7 +93,37 @@
         { label: 'New message', icon: IconMessage, run: () => (chat.composing = true) },
         { label: 'New bot', icon: IconBot, run: () => (chat.editor = { bot: null }) },
         { label: 'New group chat', icon: IconUsers, run: () => (chat.editor = { group: null }) },
+        { label: 'New workspace', icon: IconFolderPlus, run: openFolder },
       ],
+    }
+  }
+
+  function openFolder() {
+    folder = { path: '', name: '', problem: '' }
+    chooseFolder()
+  }
+
+  // silver opens the machine's folder dialog when it can; a browser never reveals a path, so the
+  // sheet is where one is typed when it cannot.
+  async function chooseFolder() {
+    try {
+      const picked = (await api('/v1/workspaces/pick', { method: 'POST' })).path
+      if (picked) {
+        folder.path = picked
+        await saveFolder()
+      }
+    } catch (e) {
+      folder.problem = e.message
+    }
+  }
+
+  async function saveFolder() {
+    if (!folder.path.trim()) return
+    try {
+      await addWorkspace(folder.path.trim(), folder.name.trim())
+      folder = null
+    } catch (e) {
+      folder.problem = e.message
     }
   }
 
@@ -97,6 +151,7 @@
       <div class="section" class:empty={!section.bots.length} title={section.path}>
         <section.icon />
         <span class="name">{section.name}</span>
+        {#if section.path}<button type="button" class="more press" title="Workspace menu" aria-label="Workspace menu" onclick={(e) => sectionMenu(e, section)}><IconMore /></button>{/if}
         <button type="button" class="add press" title={section.add} aria-label={section.add} onclick={() => (chat.editor = section.editor)}><IconPlus /></button>
       </div>
       {#each section.bots as bot (bot.id)}
@@ -119,6 +174,19 @@
 
 {#if menu}<Menu {...menu} onclose={() => (menu = null)} />{/if}
 {#if ask}<Dialog {...ask} onclose={() => (ask = null)} />{/if}
+{#if folder}
+  <Sheet title="New workspace" onclose={() => (folder = null)}>
+    {#snippet actions()}
+      <button type="button" class="round press save" class:ready={folder.path.trim()} title="Add workspace" aria-label="Add workspace" onclick={saveFolder}><IconCheck /></button>
+    {/snippet}
+    <form class="ws" onsubmit={(e) => (e.preventDefault(), saveFolder())}>
+      <button type="button" class="choose press" onclick={chooseFolder}><IconFolderPlus />Choose folder…</button>
+      <label class="row"><span>Path</span><input placeholder="/path/to/project" bind:value={folder.path} use:focus oninput={() => (folder.problem = '')} /></label>
+      <label class="row"><span>Name</span><input placeholder="Optional" bind:value={folder.name} /></label>
+      {#if folder.problem}<p class="problem" role="alert">{folder.problem}</p>{/if}
+    </form>
+  </Sheet>
+{/if}
 
 <style>
   .roster { display: flex; flex-direction: column; min-height: 0; background: var(--m-surface); }
@@ -135,13 +203,23 @@
   .section.empty { color: var(--m-tertiary); }
   .section > :global(svg) { flex: none; width: 13px; height: 13px; }
   .section .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .add { display: grid; flex: none; place-items: center; width: 22px; height: 22px; padding: 0; border: 0; border-radius: 50%; background: none; color: var(--m-tertiary); }
-  .add:hover { background: var(--bg-hover); color: var(--m-text); }
-  @media (hover: hover) { .add { opacity: 0; } .section:hover .add, .add:focus-visible { opacity: 1; } }
-  .add :global(svg) { width: 13px; height: 13px; }
+  .add, .more { display: grid; flex: none; place-items: center; width: 22px; height: 22px; padding: 0; border: 0; border-radius: 50%; background: none; color: var(--m-tertiary); }
+  .add:hover, .more:hover { background: var(--bg-hover); color: var(--m-text); }
+  @media (hover: hover) { .add, .more { opacity: 0; } .section:hover .add, .section:hover .more, .add:focus-visible, .more:focus-visible { opacity: 1; } }
+  .add :global(svg), .more :global(svg) { width: 13px; height: 13px; }
   .none { display: grid; gap: 4px; margin: auto; padding: 24px; text-align: center; }
   .none strong { font-size: var(--text-md); font-weight: 600; }
   .none span { color: var(--m-secondary); font-size: var(--text-sm); }
+  .ws { display: grid; gap: 2px; }
+  .choose { display: flex; align-items: center; justify-content: center; gap: 8px; min-height: 44px; margin-bottom: 6px; border: 0; border-radius: 12px; background: var(--m-surface); color: var(--m-text); font: inherit; font-size: var(--text-md); }
+  .choose:hover { background: var(--bg-hover); }
+  .choose :global(svg) { width: 16px; height: 16px; color: var(--m-secondary); }
+  .row { display: flex; align-items: center; gap: 12px; min-height: 44px; border: 0; background: none; color: var(--m-text); font-size: var(--text-md); }
+  .row > span:first-child { flex: none; width: 70px; color: var(--m-secondary); }
+  .row input { flex: 1; min-width: 0; border: 0; outline: 0; background: none; color: var(--m-text); font: inherit; }
+  .problem { margin: 8px 0 0; color: var(--m-danger); font-size: var(--text-sm); }
+  .save { background: var(--m-dim); color: var(--m-tertiary); }
+  .save.ready { background: var(--m-fill); color: var(--m-on-fill); }
   footer { display: flex; align-items: center; gap: 8px; flex: none; padding: 10px 12px 12px; }
   .foot { display: inline-flex; align-items: center; gap: 8px; height: 34px; padding: 0 12px; border: 0; border-radius: 999px; background: none; color: var(--m-secondary); font-size: var(--text-sm); }
   .foot:hover { background: var(--bg-hover); color: var(--m-text); }

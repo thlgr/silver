@@ -570,6 +570,10 @@ pub enum EventPayload {
     /// compaction. Emitted before every model request of the run.
     #[serde(rename = "context.updated")]
     ContextUpdated { context: ContextUsage },
+    /// An external agent began a new message: the text streamed before it is superseded, so a
+    /// live view shows only the message being written now.
+    #[serde(rename = "text.started")]
+    TextStarted,
     #[serde(rename = "text.delta")]
     TextDelta { delta: String },
     /// A slice of the model's reasoning stream, for a live "thinking" indicator; never part
@@ -698,6 +702,7 @@ impl EventPayload {
             EventPayload::RunQueued { .. } => "run.queued",
             EventPayload::RunStarted { .. } => "run.started",
             EventPayload::ContextUpdated { .. } => "context.updated",
+            EventPayload::TextStarted => "text.started",
             EventPayload::TextDelta { .. } => "text.delta",
             EventPayload::ReasoningDelta { .. } => "reasoning.delta",
             EventPayload::TextCompleted { .. } => "text.completed",
