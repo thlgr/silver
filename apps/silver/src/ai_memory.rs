@@ -21,8 +21,13 @@ pub const SERVER_NAME: &str = "ai-memory";
 const START_TIMEOUT: Duration = Duration::from_secs(20);
 /// How often the health endpoint is polled while starting.
 const POLL_EVERY: Duration = Duration::from_millis(250);
-/// The producer name silver sends as `agent` and `extension`.
+/// The producer name silver sends as `extension`, and its identity in the ingest key.
 const PRODUCER: &str = "silver";
+/// The agent kind silver reports on the wire. ai-memory keeps a tool call's content only for the
+/// agent kinds it has a verified shape for, and silver posts the Claude Code shape
+/// (`tool_name`/`tool_input`/`tool_response`), so it reports as `claude-code` and keeps the truth
+/// in `extension=silver`. A kind of its own upstream would let it report honestly.
+const WIRE_AGENT: &str = "claude-code";
 /// ai-memory takes at most this many events in one `/hook/batch`; a fuller queue drops events.
 const BATCH_MAX: usize = 256;
 /// Tool events leave this many queue slots free, so a lifecycle event is never the one dropped.
@@ -266,7 +271,7 @@ impl Event {
             &format!("{endpoint}/hook"),
             [
                 ("event", self.name),
-                ("agent", PRODUCER),
+                ("agent", WIRE_AGENT),
                 ("workspace", scope.workspace.as_str()),
                 ("project", scope.project.as_str()),
                 ("extension", PRODUCER),
@@ -499,7 +504,7 @@ async fn fetch_handoff(endpoint: &str, scope: &RunScope) -> Option<String> {
         client
             .get(format!("{endpoint}/handoff"))
             .query(&[
-                ("agent", PRODUCER),
+                ("agent", WIRE_AGENT),
                 ("cwd", scope.cwd.as_str()),
                 ("workspace", scope.workspace.as_str()),
                 ("project", scope.project.as_str()),
@@ -648,7 +653,7 @@ mod tests {
         let pairs = query(&first);
         assert_eq!(pairs["event"], "post-tool-use");
         assert_eq!(pairs["source_event"], "post-tool-use");
-        assert_eq!(pairs["agent"], "silver");
+        assert_eq!(pairs["agent"], "claude-code");
         assert_eq!(pairs["extension"], "silver");
         assert_eq!(pairs["workspace"], "team");
         assert_eq!(pairs["project"], "app");
@@ -826,7 +831,7 @@ mod tests {
 
         assert_eq!(handoff.as_deref(), Some("**Next steps**\n- fix the parser"));
         let asked = asked.lock().unwrap();
-        assert_eq!(asked["agent"], "silver");
+        assert_eq!(asked["agent"], "claude-code");
         assert_eq!(asked["session_id"], "s1");
         assert_eq!(asked["cwd"], "/work/app");
         assert_eq!(asked["workspace"], "team");
