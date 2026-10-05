@@ -17,7 +17,7 @@ A bot is a persistent, named teammate with its own chat:
 | name, about | What the roster shows; the about text is what the bot, and the other bots, know it for |
 | avatar | One of 8 shapes in one of 11 colours, drawn as a halftone grid with hollow eyes that glance and blink while the bot works |
 | agent, model | Which [provider](provider-setup.md) answers, and which model. Empty follows the daemon's default. Any provider works, including the [external agent modes](provider-setup.md#external-agent-modes-acp) |
-| effort | The reasoning effort the bot's turns run at (`none`…`high`), like the workbench's effort menu. Empty follows the daemon default |
+| effort | The reasoning effort the bot's turns run at, from the levels the chosen model supports, like the workbench's effort menu. Empty follows the daemon default. External agents ignore it |
 | workspace | One of the workbench's [workspaces](tools.md), or **Add workspace…** to register a folder (typed by path when silver cannot open the machine's folder dialog). Without one a bot can chat, remember and ask other bots, but it has no file or shell tools |
 | permissions | *Ask me* (silver's normal approvals) or *Approve automatically* |
 | instructions | Standing instructions, given to the bot on every turn |
@@ -184,18 +184,14 @@ the cap fails half way through its work. Silver reads those limits so it can sto
   started* notice with the reset time. A turn already running is stopped, what was queued behind it
   is dropped, and the chat says *Stopped*. In a group the bot sits out like any member whose turn
   failed. Only the session window decides, and the line is fixed.
-- **How it is read.** Once a minute, and at once when a bot is created or edited, for each provider
-  the bots use. Claude's reading uses the sign-in file Claude Code keeps (`~/.claude/.credentials.json`,
-  or under `CLAUDE_CONFIG_DIR`), so it needs Claude Code signed in on the machine silver runs on.
-  OpenCode Go's uses the provider's own API key. Both are undocumented endpoints, and Anthropic's
-  answers some accounts with `429` every time. So Claude's windows also come with each turn a Claude
-  bot runs, as its adapter reports them. That does not read the sign-in file, so on macOS, where the
-  sign-in is in the Keychain, it is the only source, but it updates the bar only while a Claude bot
-  works. If a reading cannot be had the bots run as before, and the last reading holds until its
-  window resets.
-- **Kept.** Each new reading is saved (`provider_limits`, migration `0004`), so after a restart
-  the bars and the 90% line stand on the last reading until the next one, and the bar stays while
-  the endpoint refuses to answer. A session window that has reset since is not shown.
+- **How it is read.** Claude's windows come with each turn a Claude bot runs, as its adapter
+  reports them; there is no separate poll, so the bar moves while a Claude bot works and not
+  while it sits idle. OpenCode Go's windows are read from the provider's own API key against an
+  undocumented endpoint, once a minute and at once when a bot is created or edited. If a reading
+  cannot be had the bots run as before, and the last reading holds until its window resets.
+- **Kept.** Each new reading is saved (`provider_limits`), so after a restart the bars and the
+  90% line stand on the last reading until the next one, and the bar stays while the endpoint
+  refuses to answer. A session window that has reset since is not shown.
 
 ## Not included
 

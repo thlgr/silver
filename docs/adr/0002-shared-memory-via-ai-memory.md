@@ -50,7 +50,9 @@ Retire silver's Markdown memory and make ai-memory the memory of record.
   exactly Claude Code's shape, and `extension=silver` carries the truth until silver has a kind of
   its own upstream. One session can span several idle periods: after a quiet
   `session-end` ai-memory keeps the session's observations and rewrites its summary on the next
-  end, so a later run needs no new start. A session ends in ai-memory once it has had no run for
+  end, so a later run needs no new start. The ten-minute quiet before that `session-end` is what
+  lets one bot's consecutive turns share a session and one summary, instead of fragmenting a
+  conversation into a session per run. A session ends in ai-memory once it has had no run for
   ten minutes, or at shutdown, which is when ai-memory writes its summary page and handoff. An ACP
   agent keeps its own hooks and is not captured here, so nothing is stored twice; a run with no
   workspace has no project and is not captured. A tool call made inside a subagent reaches the run
@@ -76,7 +78,9 @@ Retire silver's Markdown memory and make ai-memory the memory of record.
   for; silver is not one, so a native run's tool calls are stored as counts, not content (the
   posted body carries the redacted argument preview and the result summary, ready for the day
   silver has a shape upstream). Delivery is best-effort without holding up a run: a batch the
-  server does not take is retried once, then logged and dropped, and a burst of tool calls cannot
-  evict a lifecycle event because the queue keeps a reserve for it.
+  server does not take is retried once, then logged and dropped (one retry covers a server that
+  restarts mid-batch; a 4xx will not heal, so more would only delay the queue), and a burst of
+  tool calls cannot evict a lifecycle event because the queue keeps a reserve for it (start and
+  end carry the session summary; dropping them loses the session even though every call survived).
 - Memory no longer sits in the run's system prompt; it arrives through a tool call, so prompts
   shrink and the `memory.changed` event goes away.

@@ -12,6 +12,7 @@ CREATE TABLE bots (
     avatar_color TEXT NOT NULL,
     provider TEXT,
     model TEXT,
+    reasoning_effort TEXT,          -- the level its turns run at; absent follows the daemon default
     workspace_id TEXT,
     yolo INTEGER NOT NULL DEFAULT 0,
     members TEXT NOT NULL DEFAULT '[]',   -- JSON array of bot ids, for a group
@@ -46,4 +47,11 @@ CREATE TABLE chat_reads (
     thread_id TEXT NOT NULL DEFAULT '',
     read_seq INTEGER NOT NULL,
     PRIMARY KEY (chat_id, thread_id)
+);
+
+-- The usage limits last read for each provider, so a bot's bar shows at once after a restart and
+-- while the provider's endpoint refuses to answer.
+CREATE TABLE provider_limits (
+    provider TEXT PRIMARY KEY,
+    windows TEXT NOT NULL
 );

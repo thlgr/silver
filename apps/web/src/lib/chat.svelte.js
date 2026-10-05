@@ -2,7 +2,10 @@
 // routes and decides everything (who answers, who is mentioned, what counts as unread); this
 // only holds what it was told and what is on screen. Components read `chat` and call these.
 import { api, subscribeChat } from './api.js'
-import { buildTurns, notify, storeAttachment } from './state.svelte.js'
+import { buildTurns, notify } from './state.svelte.js'
+
+// The workbench and the Messages window share these two drag/attachment helpers.
+export { isFileDrag, storeAll as storeFiles } from './state.svelte.js'
 
 const PAGE = 50
 
@@ -36,24 +39,6 @@ export function addFiles(key, list) {
 
 export function removeFile(key, at) {
   laneFiles(key).splice(at, 1)
-}
-
-/** During a drag the browser hides the files, so the `Files` type is the only honest test:
- *  answering true for dragged text would swallow a drop the textarea should handle itself. */
-export const isFileDrag = (e) => [...(e.dataTransfer?.types ?? [])].includes('Files')
-
-/** Store files into a workspace's .silver/attachments; a file that fails reports itself and
- *  is left out of the returned list. */
-export async function storeFiles(workspace, list) {
-  const stored = []
-  for (const file of list) {
-    try {
-      stored.push(await storeAttachment(workspace, file))
-    } catch (e) {
-      notify(e.message, true)
-    }
-  }
-  return stored
 }
 
 /** A chat a dropped file cannot land in: say why, and point at the way out. */

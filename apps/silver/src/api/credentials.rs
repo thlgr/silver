@@ -113,6 +113,8 @@ fn map_auth(error: &AuthError) -> ApiFailure {
 
 /// `GET /v1/auth`: every provider with its endpoint, model and sign-in state.
 pub async fn list(State(state): State<AppState>) -> Result<Json<Value>, ApiFailure> {
+    // Which agent modes are installed is read from the login-shell PATH; hydrate it once here.
+    crate::agent_modes::ensure_path().await;
     let store = store(&state)?;
     let routes = routes(&state)?;
     let active = store.active();

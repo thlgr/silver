@@ -406,7 +406,8 @@ One SQLite database at <data_dir>/state.db is driven by a single tokio-rusqlite 
 Db::initialize sets PRAGMA foreign_keys = ON, busy_timeout = 5000 ms and journal_mode = WAL.
 
 The schema is a ladder of embedded migrations: `migrations/0001_initial.sql` and
-`0002_chat.sql` (`bots`, `chat_entries`, `chat_reads`, see [messages.md](messages.md)), each applied
+`0002_chat.sql` (`bots`, `chat_entries`, `chat_reads`, `provider_limits`, see
+[messages.md](messages.md)), each applied
 once and stamped into `PRAGMA user_version`. Tables: workspaces, sessions, runs, messages, tool_calls,
 approvals, run_events, memory_changes, checkpoints, spend_events, presets, documents and
 document_chunks, plus the FTS5 indexes over messages and document chunks and the triggers that keep

@@ -83,6 +83,8 @@ pub struct ChatHub {
     state: Mutex<State>,
     /// Wakes the usage-limit watch before its next round.
     recheck: Notify,
+    /// Wakes a bot deletion when a worker retires, so it need not poll.
+    idle: Notify,
 }
 
 fn invalid(message: impl Into<String>) -> CoreError {
@@ -152,7 +154,7 @@ fn effort(value: Option<String>) -> CoreResult<Option<String>> {
         if !crate::config::is_valid_reasoning_effort(level) {
             return Err(invalid(format!(
                 "reasoning_effort {level:?} must be one of {}",
-                crate::config::REASONING_EFFORTS.join(", ")
+                crate::config::REASONING_EFFORT_LADDER.join(", ")
             )));
         }
     }
@@ -168,6 +170,7 @@ impl ChatHub {
             events,
             state: Mutex::new(State::default()),
             recheck: Notify::new(),
+            idle: Notify::new(),
         })
     }
 
@@ -204,7 +207,9 @@ impl ChatHub {
     // MARK: roster
 
     pub async fn bots(&self) -> CoreResult<Vec<BotView>> {
-        let (rows, stats) = tokio::try_join!(self.db.chat_bots(), self.db.chat_bot_stats())?;
+        let rows = self.db.chat_bots().await?;
+        let ids: Vec<String> = rows.iter().map(|bot| bot.id.clone()).collect();
+        let stats = self.db.chat_bot_stats(&ids).await?;
         Ok(self.views(rows, &stats))
     }
 
@@ -268,15 +273,30 @@ impl ChatHub {
 
     /// Tell every client about a bot, and about the groups it is in, whose row follows it.
     async fn publish_bot(&self, id: &str) {
-        match self.bots().await {
-            Ok(bots) => {
-                for bot in bots {
-                    if bot.id == id || bot.members.iter().any(|member| member == id) {
-                        self.emit(ChatEvent::Bot { bot });
-                    }
-                }
+        let rows = match self.db.chat_bots().await {
+            Ok(rows) => rows,
+            Err(error) => {
+                tracing::warn!(%error, "the bot roster could not be read");
+                return;
             }
-            Err(error) => tracing::warn!(%error, "the bot roster could not be read"),
+        };
+        // Only this bot and its groups change, so their stats are all the roster needs.
+        let ids: Vec<String> = rows
+            .iter()
+            .filter(|bot| bot.id == id || bot.members.iter().any(|member| member == id))
+            .map(|bot| bot.id.clone())
+            .collect();
+        let stats = match self.db.chat_bot_stats(&ids).await {
+            Ok(stats) => stats,
+            Err(error) => {
+                tracing::warn!(%error, "the bot roster stats could not be read");
+                return;
+            }
+        };
+        for bot in self.views(rows, &stats) {
+            if bot.id == id || bot.members.iter().any(|member| member == id) {
+                self.emit(ChatEvent::Bot { bot });
+            }
         }
     }
 
@@ -420,12 +440,19 @@ impl ChatHub {
     pub async fn delete_bot(self: &Arc<Self>, id: &str) -> CoreResult<()> {
         let row = self.bot(id).await?;
         self.stop(id).await?;
-        // A stopped run still writes its last events to the session it is about to lose.
-        for _ in 0..50 {
+        // A stopped run still writes its last events to the session it is about to lose; wait
+        // for its worker to retire rather than polling.
+        while self.is_busy(id) {
+            let idle = self.idle.notified();
             if !self.is_busy(id) {
                 break;
             }
-            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            if tokio::time::timeout(std::time::Duration::from_secs(5), idle)
+                .await
+                .is_err()
+            {
+                break;
+            }
         }
         self.db
             .delete_sessions_with_key_prefix(SESSION_SOURCE, &format!("chat:{id}:"))
@@ -900,7 +927,7 @@ mod tests {
         let error = hub
             .create_bot(CreateBotRequest {
                 name: "Too much".into(),
-                reasoning_effort: Some("ultra".into()),
+                reasoning_effort: Some("turbo".into()),
                 ..Default::default()
             })
             .await

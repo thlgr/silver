@@ -2,11 +2,11 @@
 //! The reply lands whole when the turn ends; tools and thinking stay in the session.
 
 use super::store::{now_ms, BotRow};
-use super::{new_entry, preview, ChatHub, Runtime};
+use super::{group, new_entry, preview, ChatHub, Runtime};
 use serde_json::Value;
 use silver_core::error::{CoreError, CoreResult};
 use silver_core::session::Session;
-use silver_protocol::chat::{BotStatus, ChatEntry, EntryKind, PermissionView};
+use silver_protocol::chat::{BotKind, BotStatus, ChatEntry, EntryKind, PermissionView};
 use silver_protocol::{
     ApprovalDecision, ApprovalId, CreateRunRequest, EventPayload, MessageInput, RiskLevel, RunId,
 };
@@ -199,6 +199,9 @@ impl ChatHub {
             .and_then(|queue| queue.pop_front())
         else {
             state.workers.remove(bot);
+            drop(state);
+            // A deletion waiting on this bot can stop sleeping once no worker remains.
+            self.idle.notify_waiters();
             return None;
         };
         let Job::User { lane, mut entries } = job else {
@@ -577,14 +580,12 @@ impl ChatHub {
     pub async fn stop(self: &Arc<Self>, id: &str) -> CoreResult<()> {
         let bot = self.bot(id).await?;
         match bot.kind {
-            silver_protocol::chat::BotKind::Agent => self.stop_turns(id, |_| true).await,
-            silver_protocol::chat::BotKind::Group => group::stop(self, &bot).await,
+            BotKind::Agent => self.stop_turns(id, |_| true).await,
+            BotKind::Group => group::stop(self, &bot).await,
         }
         Ok(())
     }
 }
-
-use super::group;
 
 /// What the bot is told about itself on every turn, beside the system prompt.
 fn context(bot: &BotRow) -> String {

@@ -432,16 +432,24 @@ impl Db {
         .await
     }
 
-    /// What each roster row shows: its newest message and how many replies are unread.
-    pub async fn chat_bot_stats(&self) -> DbResult<HashMap<String, BotStats>> {
-        self.call(|conn| {
+    /// What each named roster row shows: its newest message and how many replies are unread.
+    /// Restricted to `ids` because a bot's status change only publishes its own chat and its
+    /// groups', and the unread count scans every entry in the table.
+    pub async fn chat_bot_stats(&self, ids: &[String]) -> DbResult<HashMap<String, BotStats>> {
+        let ids = ids.to_vec();
+        self.call(move |conn| {
             let mut out: HashMap<String, BotStats> = HashMap::new();
-            let mut last = conn.prepare(
+            if ids.is_empty() {
+                return Ok(out);
+            }
+            let in_ids = vec!["?"; ids.len()].join(",");
+            let mut last = conn.prepare(&format!(
                 "SELECT chat_id, kind, author, text, created_at FROM chat_entries \
                  WHERE seq IN (SELECT MAX(seq) FROM chat_entries WHERE thread_id IS NULL \
-                               AND kind IN ('user', 'agent') GROUP BY chat_id)",
-            )?;
-            let mut rows = last.query([])?;
+                               AND kind IN ('user', 'agent') AND chat_id IN ({in_ids}) \
+                               GROUP BY chat_id)",
+            ))?;
+            let mut rows = last.query(params_from_iter(&ids))?;
             while let Some(row) = rows.next()? {
                 let kind: String = row.get(1)?;
                 out.entry(row.get(0)?).or_default().last = Some((
@@ -451,14 +459,15 @@ impl Db {
                     row.get(4)?,
                 ));
             }
-            let mut unread = conn.prepare(
+            let mut unread = conn.prepare(&format!(
                 "SELECT e.chat_id, COUNT(*) FROM chat_entries e \
                  LEFT JOIN chat_reads r ON r.chat_id = e.chat_id \
                       AND r.thread_id = COALESCE(e.thread_id, '') \
                  WHERE e.kind = 'agent' AND e.seq > COALESCE(r.read_seq, 0) \
+                       AND e.chat_id IN ({in_ids}) \
                  GROUP BY e.chat_id",
-            )?;
-            let mut rows = unread.query([])?;
+            ))?;
+            let mut rows = unread.query(params_from_iter(&ids))?;
             while let Some(row) = rows.next()? {
                 let count: i64 = row.get(1)?;
                 out.entry(row.get(0)?).or_default().unread = u32::try_from(count).unwrap_or(0);
@@ -531,7 +540,7 @@ mod tests {
         let reply = add(&db, EntryKind::Agent, None, "hello").await;
         let unread = |db: &Db| {
             let db = Db::clone(db);
-            async move { db.chat_bot_stats().await.unwrap()["chat"].unread }
+            async move { db.chat_bot_stats(&["chat".to_string()]).await.unwrap()["chat"].unread }
         };
         assert_eq!(unread(&db).await, 1);
         assert!(db.chat_mark_read("chat", None).await.unwrap());

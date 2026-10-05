@@ -67,39 +67,36 @@ impl AiMemory {
         let bind = config.memory.bind.trim().to_string();
         let endpoint = format!("http://{bind}");
         let binary = config.memory.binary.as_deref().unwrap_or(SERVER_NAME);
-        if healthy(&endpoint).await {
+        let child = if healthy(&endpoint).await {
             tracing::info!(endpoint = %endpoint, "using the ai-memory server already listening");
-            return Some(AiMemory {
-                child: None,
-                server: server_for(&bind),
-                hooks: MemoryHooks::start(&endpoint),
-                endpoint,
-            });
-        }
-        let fallback_dir = silver_data_dir.join(SERVER_NAME);
-        let data_dir = config.memory.data_dir.as_deref().unwrap_or(&fallback_dir);
-        let child = match spawn(binary, &bind, data_dir) {
-            Ok(child) => child,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                tracing::warn!(
-                    binary = %binary,
-                    "ai-memory is not installed, so shared memory is off; install it and restart"
-                );
+            None
+        } else {
+            let fallback_dir = silver_data_dir.join(SERVER_NAME);
+            let data_dir = config.memory.data_dir.as_deref().unwrap_or(&fallback_dir);
+            let child = match spawn(binary, &bind, data_dir) {
+                Ok(child) => child,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    tracing::warn!(
+                        binary = %binary,
+                        "ai-memory is not installed, so shared memory is off; install it and restart"
+                    );
+                    return None;
+                }
+                Err(error) => {
+                    tracing::warn!(%error, binary = %binary, "ai-memory could not be started");
+                    return None;
+                }
+            };
+            if !wait_healthy(&endpoint).await {
+                // Dropping the child kills it: the command sets `kill_on_drop`.
+                tracing::warn!(endpoint = %endpoint, binary = %binary, "ai-memory did not become healthy");
                 return None;
             }
-            Err(error) => {
-                tracing::warn!(%error, binary = %binary, "ai-memory could not be started");
-                return None;
-            }
+            tracing::info!(endpoint = %endpoint, data_dir = %data_dir.display(), "ai-memory started");
+            Some(child)
         };
-        if !wait_healthy(&endpoint).await {
-            // Dropping the child kills it: the command sets `kill_on_drop`.
-            tracing::warn!(endpoint = %endpoint, binary = %binary, "ai-memory did not become healthy");
-            return None;
-        }
-        tracing::info!(endpoint = %endpoint, data_dir = %data_dir.display(), "ai-memory started");
         Some(AiMemory {
-            child: Some(child),
+            child,
             server: server_for(&bind),
             hooks: MemoryHooks::start(&endpoint),
             endpoint,
@@ -178,19 +175,22 @@ async fn wait_healthy(endpoint: &str) -> bool {
     }
 }
 
-/// One client for the health polls and the event batches; each request sets its own deadline.
-fn http() -> Option<&'static reqwest::Client> {
-    static HTTP: std::sync::OnceLock<Option<reqwest::Client>> = std::sync::OnceLock::new();
-    HTTP.get_or_init(|| reqwest::Client::builder().build().ok())
-        .as_ref()
+/// One client for the loopback ai-memory server, shared by the health polls, the handoff fetch
+/// and the event batches; each request sets its own deadline.
+pub(crate) fn loopback_client() -> &'static reqwest::Client {
+    static CLIENT: std::sync::OnceLock<reqwest::Client> = std::sync::OnceLock::new();
+    CLIENT.get_or_init(|| {
+        reqwest::Client::builder()
+            // ai-memory listens on loopback; never send it through the environment's proxy.
+            .no_proxy()
+            .build()
+            .expect("the loopback client builds")
+    })
 }
 
 /// Whether an ai-memory server is answering on `endpoint`.
 async fn healthy(endpoint: &str) -> bool {
-    let Some(client) = http() else {
-        return false;
-    };
-    client
+    loopback_client()
         .get(format!("{endpoint}/healthz"))
         .timeout(HEALTH_TIMEOUT)
         .send()
@@ -202,16 +202,10 @@ async fn healthy(endpoint: &str) -> bool {
 /// when it names them, else `default` and the folder's name. ai-memory's git-remote identity can
 /// name a project differently; the panel then shows an empty list rather than a wrong one.
 pub(crate) fn resolve_project(root: &Path) -> (String, String) {
-    let marker = std::fs::read_to_string(root.join(".ai-memory.toml")).ok();
-    let named = |key: &str| {
-        marker
-            .as_deref()?
-            .parse::<toml::Value>()
-            .ok()?
-            .get(key)?
-            .as_str()
-            .map(str::to_string)
-    };
+    let marker = std::fs::read_to_string(root.join(".ai-memory.toml"))
+        .ok()
+        .and_then(|text| text.parse::<toml::Value>().ok());
+    let named = |key: &str| marker.as_ref()?.get(key)?.as_str().map(str::to_string);
     let workspace = named("workspace").unwrap_or_else(|| "default".to_string());
     let project = named("project").unwrap_or_else(|| {
         root.file_name()
@@ -498,7 +492,7 @@ async fn deliver(endpoint: String, mut rx: mpsc::Receiver<Msg>) {
 /// it is passed on as is, cut in the middle so the closing marker stays. A failed fetch is logged:
 /// the run goes on without it.
 async fn fetch_handoff(endpoint: &str, scope: &RunScope) -> Option<String> {
-    let client = http()?;
+    let client = loopback_client();
     let fetched = async {
         client
             .get(format!("{endpoint}/handoff"))
@@ -529,9 +523,7 @@ async fn fetch_handoff(endpoint: &str, scope: &RunScope) -> Option<String> {
 /// Post events to `/hook/batch`. A batch the server does not take is retried once, then logged
 /// and dropped; delivery never blocks a run.
 async fn send(endpoint: &str, events: Vec<Event>) {
-    let Some(client) = http() else {
-        return;
-    };
+    let client = loopback_client();
     for chunk in events.chunks(BATCH_MAX) {
         let items: Vec<Value> = chunk
             .iter()

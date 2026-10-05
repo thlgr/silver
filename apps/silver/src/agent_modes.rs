@@ -308,9 +308,23 @@ fn well_known_dirs() -> Vec<PathBuf> {
     dirs
 }
 
+/// Hydrate the login-shell PATH once, on a blocking thread, so a slow shell (`$SHELL -ilc` can
+/// take seconds under nvm/conda) never delays startup or stalls the async runtime. Call it
+/// before resolving a mode CLI.
+pub async fn ensure_path() {
+    static HYDRATED: tokio::sync::OnceCell<()> = tokio::sync::OnceCell::const_new();
+    HYDRATED
+        .get_or_init(|| async {
+            if let Err(error) = tokio::task::spawn_blocking(hydrate_path).await {
+                tracing::warn!(%error, "could not hydrate the login-shell PATH");
+            }
+        })
+        .await;
+}
+
 /// Re-detects the search path and exports it as this process's PATH, so every agent we spawn
-/// (and the node/npx they need) resolves the same way. Called at startup, before any run.
-pub fn hydrate_path() {
+/// (and the node/npx they need) resolves the same way. Runs once, via [ensure_path].
+fn hydrate_path() {
     let mut path: Vec<PathBuf> = vec![];
     let current = std::env::var("PATH").unwrap_or_default();
     let login = login_shell_path().unwrap_or_default();

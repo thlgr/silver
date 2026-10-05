@@ -52,9 +52,7 @@ jobs:
         run: cargo machete
 
       - name: Clippy
-        # --no-default-features skips the pdf-extract stack for a fast cold lint;
-        # the test step builds the default (pdf) features.
-        run: cargo clippy --workspace --all-targets --no-default-features -- -D warnings
+        run: cargo clippy --workspace --all-targets -- -D warnings
 
       - name: Test
         run: cargo test --workspace

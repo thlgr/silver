@@ -3,7 +3,7 @@
 //! ends expires, and the agent is told no.
 
 use super::{new_entry, preview, ChatHub};
-use crate::acp::{PermissionBroker, PermissionRequest};
+use crate::acp::{AcpBroker, PermissionRequest};
 use async_trait::async_trait;
 use serde_json::{json, Value};
 use silver_protocol::chat::{BotStatus, EntryKind, PermissionView};
@@ -111,7 +111,7 @@ impl ChatHub {
 }
 
 #[async_trait]
-impl PermissionBroker for ChatHub {
+impl AcpBroker for ChatHub {
     async fn decide(&self, request: PermissionRequest) -> ApprovalDecision {
         let Ok(session) = request.session.parse::<SessionId>() else {
             return ApprovalDecision::Deny;
