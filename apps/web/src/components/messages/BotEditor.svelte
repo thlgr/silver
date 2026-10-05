@@ -1,7 +1,7 @@
 <!-- Create a bot or change one: its face, what it is for, which agent runs it and where, and
      whether it asks before acting. Sections use Codync's card look. -->
 <script>
-  import { addWorkspace, app, listModels, openFolderDialog } from '../../lib/state.svelte.js'
+  import { addWorkspace, app, DEFAULT_EFFORTS, EFFORTS, listModels, openFolderDialog } from '../../lib/state.svelte.js'
   import { COLORS, SHAPES } from '../../lib/avatar.js'
   import { deleteBot, saveBot, select } from '../../lib/chat.svelte.js'
   import Avatar from './Avatar.svelte'
@@ -30,7 +30,7 @@
     workspace_id: bot ? (bot.workspace_id ?? '') : (workspace ?? app.scope ?? app.workspaces[0]?.id ?? ''),
     yolo: bot?.yolo ?? false,
   })
-  let models = $state([])
+  let catalog = $state(null)
   let saving = $state(false)
   let ask = $state(null)
   let problem = $state('')
@@ -53,25 +53,35 @@
     { value: 'ask', label: 'Ask me' },
     { value: 'auto', label: 'Approve automatically' },
   ]
-  // The daemon's accepted levels, weakest to strongest; blank follows the daemon default.
-  const EFFORTS = [
-    { value: '', label: 'Default' },
-    { value: 'none', label: 'None' },
-    { value: 'minimal', label: 'Minimal' },
-    { value: 'low', label: 'Low' },
-    { value: 'medium', label: 'Medium' },
-    { value: 'high', label: 'High' },
-  ]
   const chosenProvider = $derived(draft.provider || app.activeProvider)
   // An external agent brings its own tools, so "no workspace" does not mean it cannot touch files.
   const external = $derived(app.providers.find((p) => p.id === chosenProvider)?.kind === 'acp')
 
-  // The model suggestions follow the provider.
+  // The model suggestions and effort levels follow the provider.
   $effect(() => {
     const provider = chosenProvider
-    models = []
-    if (provider) listModels(provider).then((catalog) => (models = catalog.models ?? [])).catch(() => {})
+    catalog = null
+    if (provider) listModels(provider).then((loaded) => (catalog = loaded)).catch(() => {})
   })
+  const models = $derived(catalog?.models ?? [])
+  // What the chosen model supports; a blank model runs as the provider's default. A model the
+  // catalog does not list, such as one still being typed, is unknown.
+  const supported = $derived(catalog?.efforts?.[draft.model || catalog.default])
+  const efforts = $derived([
+    { value: '', label: 'Default' },
+    ...EFFORTS.filter((level) => (supported ?? DEFAULT_EFFORTS).includes(level.value) || level.value === draft.reasoning_effort),
+  ])
+  // The run would clamp a level the model lacks, so the editor does not keep showing it.
+  $effect(() => {
+    if (supported && draft.reasoning_effort && !supported.includes(draft.reasoning_effort)) draft.reasoning_effort = null
+  })
+
+  // Grows with its text; the textarea's max-height stops it and it scrolls from there.
+  const grow = (node) => {
+    const fit = () => ((node.style.height = 'auto'), (node.style.height = `${node.scrollHeight}px`))
+    fit()
+    return { update: fit }
+  }
 
   async function save() {
     if (!valid || saving) return
@@ -128,7 +138,7 @@
   <h3 class="card-title">Profile</h3>
   <div class="card">
     <label class="row"><span>Name</span><input placeholder="e.g. Reviewer" maxlength="60" bind:value={draft.name} /></label>
-    <label class="col"><span>About</span><textarea rows="2" placeholder="e.g. Reviews PRs. Never pushes without asking." bind:value={draft.description}></textarea></label>
+    <label class="col"><span>About</span><textarea class="grows" rows="2" placeholder="e.g. Reviews PRs. Never pushes without asking." bind:value={draft.description} use:grow={draft.description}></textarea></label>
   </div>
 
   <h3 class="card-title">Setup</h3>
@@ -138,8 +148,10 @@
       <form class="row" onsubmit={(e) => (e.preventDefault(), addFolder(path.trim()))}><span>Path</span><input placeholder="/path/to/project" bind:value={path} use:focus /></form>
     {/if}
     <Choice label="Agent" value={draft.provider} options={providers} onchange={(id) => ((draft.provider = id), (draft.model = ''))} />
-    <Combo label="Model" bind:value={draft.model} suggestions={models} placeholder="Default" />
-    <Choice label="Effort" value={draft.reasoning_effort ?? ''} options={EFFORTS} onchange={(id) => (draft.reasoning_effort = id || null)} />
+    <Combo label="Model" bind:value={draft.model} suggestions={models} placeholder={catalog?.default && !external ? `Default (${catalog.default})` : 'Default'} />
+    {#if !external}
+      <Choice label="Effort" value={draft.reasoning_effort ?? ''} options={efforts} onchange={(id) => (draft.reasoning_effort = id || null)} />
+    {/if}
     <Choice label="Permissions" value={draft.yolo ? 'auto' : 'ask'} options={PERMISSIONS} onchange={(id) => (draft.yolo = id === 'auto')} />
   </div>
   <p class="card-note">
@@ -152,7 +164,7 @@
 
   <h3 class="card-title">Instructions</h3>
   <div class="card">
-    <label class="col"><textarea rows="5" placeholder="How this bot should work, in your words. It reads this on every turn." bind:value={draft.instructions}></textarea></label>
+    <label class="col"><textarea class="grows tall" rows="5" placeholder="How this bot should work, in your words. It reads this on every turn." bind:value={draft.instructions} use:grow={draft.instructions}></textarea></label>
   </div>
 
   {#if bot}
@@ -179,6 +191,8 @@
   input, textarea { flex: 1; min-width: 0; border: 0; outline: 0; background: none; color: var(--m-text); font: inherit; }
   .row input { text-align: right; }
   textarea { resize: vertical; line-height: 1.45; }
+  .grows { flex: none; max-height: 12em; resize: none; }
+  .tall { max-height: 24em; }
   input::placeholder, textarea::placeholder { color: var(--m-tertiary); }
   .save { background: var(--m-dim); color: var(--m-tertiary); }
   .save.ready { background: var(--m-fill); color: var(--m-on-fill); }

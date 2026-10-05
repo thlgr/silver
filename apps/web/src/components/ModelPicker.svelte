@@ -1,7 +1,7 @@
 <!-- Provider → model menu. Providers set up in Settings only; picking one on another provider switches it.
      The search box filters a long catalog and takes any model id, listed or not. -->
 <script>
-  import { app, listModels, setEffort, setModel } from '../lib/state.svelte.js'
+  import { app, DEFAULT_EFFORTS, EFFORTS, listModels, setEffort, setModel } from '../lib/state.svelte.js'
   import Popover from './Popover.svelte'
   import IconDown from '~icons/lucide/chevron-down'
   import IconRight from '~icons/lucide/chevron-right'
@@ -17,25 +17,12 @@
   let query = $state('')
   let effortOpen = $state(false)
 
-  // Default plus the daemon's accepted levels, weakest to strongest.
-  const EFFORTS = [
-    { value: null, label: 'Default' },
-    { value: 'none', label: 'None' },
-    { value: 'minimal', label: 'Minimal' },
-    { value: 'low', label: 'Low' },
-    { value: 'medium', label: 'Medium' },
-    { value: 'high', label: 'High' },
-    { value: 'xhigh', label: 'X-High' },
-    { value: 'max', label: 'Max' },
-  ]
-  // The daemon's fallback set, shown when the catalog has nothing for the model.
-  const DEFAULT_EFFORTS = ['none', 'minimal', 'low', 'medium', 'high']
   // The selected model's supported levels, from /v1/models efforts, so the menu never offers a
   // level the model cannot honor (it would be clamped to the nearest lower one on the run).
   const modelEfforts = $derived(
     catalog?.efforts?.[app.model] ?? catalog?.efforts?.[app.defaultModel] ?? DEFAULT_EFFORTS,
   )
-  const effortOptions = $derived(EFFORTS.filter((level) => level.value === null || modelEfforts.includes(level.value)))
+  const effortOptions = $derived([{ value: null, label: 'Default' }, ...EFFORTS.filter((level) => modelEfforts.includes(level.value))])
   const effortLabel = $derived(
     app.effort ?? (app.autoEffort ? `Default (${app.autoEffort})` : 'Default'),
   )

@@ -11,10 +11,11 @@ use std::path::{Path, PathBuf};
 /// Minimum length accepted for a bearer token on a non-loopback bind.
 pub const MIN_BEARER_TOKEN_LEN: usize = 16;
 
-/// Accepted `model.reasoning_effort` levels, weakest to strongest.
+/// The levels assumed for a model the registry says nothing about, weakest to strongest.
 pub const REASONING_EFFORTS: [&str; 5] = ["none", "minimal", "low", "medium", "high"];
 
-/// Extended effort ladder, weakest to strongest, used to order and clamp provider-native levels.
+/// Every accepted reasoning-effort level, weakest to strongest. A model's registry entry can offer
+/// the upper ones; they also order and clamp provider-native levels.
 pub const REASONING_EFFORT_LADDER: &[&str] = &[
     "none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra",
 ];
@@ -22,7 +23,7 @@ pub const REASONING_EFFORT_LADDER: &[&str] = &[
 /// True when `value` names an accepted reasoning-effort level (case-insensitive).
 pub fn is_valid_reasoning_effort(value: &str) -> bool {
     let value = value.trim();
-    REASONING_EFFORTS
+    REASONING_EFFORT_LADDER
         .iter()
         .any(|level| level.eq_ignore_ascii_case(value))
 }
@@ -736,7 +737,7 @@ impl Config {
             if !is_valid_reasoning_effort(effort) {
                 anyhow::bail!(
                     "model.reasoning_effort {effort:?} must be one of {}",
-                    REASONING_EFFORTS.join(", ")
+                    REASONING_EFFORT_LADDER.join(", ")
                 );
             }
         }

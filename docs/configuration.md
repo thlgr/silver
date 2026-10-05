@@ -137,7 +137,7 @@ command_requires_approval = true
 | `base_url` | from the preset | Any OpenAI-compatible or Anthropic endpoint. |
 | `api_key_env` | `OPENAI_API_KEY` | Variable name. |
 | `context_length` | detected | Overrides detection for this model ([how it is detected](provider-setup.md#context-window)). |
-| `reasoning_effort` | unset | `none`, `minimal`, `low`, `medium` or `high`; also set per chat in the model picker. |
+| `reasoning_effort` | unset | `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max` or `ultra`; also set per chat in the model picker. |
 | `reasoning_budget` | 4096 local, off hosted | Reasoning tokens one call may spend before silver cuts it off and tells the model to act. `0` disables. |
 | `fallback`, `credentials` | none | `[[model.fallback]]` and `[[model.credentials]]`, see [provider-setup.md](provider-setup.md#reliability). |
 

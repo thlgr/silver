@@ -227,7 +227,7 @@ pub async fn update(
             if !crate::config::is_valid_reasoning_effort(level) {
                 return Err(ApiFailure(CoreError::InvalidRequest(format!(
                     "reasoning_effort {level:?} must be one of {}",
-                    crate::config::REASONING_EFFORTS.join(", ")
+                    crate::config::REASONING_EFFORT_LADDER.join(", ")
                 ))));
             }
         }
