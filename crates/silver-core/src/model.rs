@@ -47,8 +47,8 @@ pub struct ModelRequest {
     /// cache. Set once from the session id and never changed mid-conversation, because a
     /// changing key would defeat the cached prefix. None disables prompt-cache routing.
     pub cache_key: Option<String>,
-    /// Requested reasoning effort. Accepted values are none, minimal, low, medium and high;
-    /// a transport clamps anything else onto its own wire vocabulary. None leaves the
+    /// Requested reasoning effort, none through ultra; a transport clamps what its wire does not
+    /// take onto its own vocabulary. None leaves the
     /// provider default in place, while none explicitly disables reasoning.
     pub reasoning_effort: Option<String>,
     /// The run this request serves, one per user message. None outside a run.

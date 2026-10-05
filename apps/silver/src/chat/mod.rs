@@ -916,12 +916,12 @@ mod tests {
         let bot = hub
             .create_bot(CreateBotRequest {
                 name: "Effort".into(),
-                reasoning_effort: Some("high".into()),
+                reasoning_effort: Some("max".into()),
                 ..Default::default()
             })
             .await
             .unwrap();
-        assert_eq!(bot.reasoning_effort.as_deref(), Some("high"));
+        assert_eq!(bot.reasoning_effort.as_deref(), Some("max"));
 
         // A level the daemon does not accept is a bad request.
         let error = hub
