@@ -209,18 +209,53 @@ impl ChatHub {
     }
 
     fn views(&self, rows: Vec<BotRow>, stats: &HashMap<String, BotStats>) -> Vec<BotView> {
-        let names: HashMap<String, String> = rows
-            .iter()
-            .map(|bot| (bot.id.clone(), bot.name.clone()))
-            .collect();
         let state = self.state();
-        rows.into_iter()
+        let mut views: Vec<BotView> = rows
+            .into_iter()
             .map(|row| {
                 let stats = stats.get(&row.id);
                 let limits = self.limits_in(&state, &row);
-                view(row, &names, &state.runtime, stats, limits)
+                view(row, &state.runtime, stats, limits)
             })
-            .collect()
+            .collect();
+        // A group's activity names a member and its last message names a speaker. Both are
+        // resolved from the names in the views just built, so no name is copied to look one up.
+        let resolved: Vec<(Option<String>, Option<String>)> = {
+            let name_of = |id: &str| {
+                views
+                    .iter()
+                    .find(|view| view.id == id)
+                    .map_or("Bot", |view| view.name.as_str())
+            };
+            views
+                .iter()
+                .filter(|view| view.kind == BotKind::Group)
+                .map(|view| {
+                    let activity = busy_member(&view.members, &state.runtime, &view.id)
+                        .map(|(live, member)| format!("{}: {}", name_of(member), live.activity));
+                    let last = stats.get(&view.id).and_then(|stats| {
+                        let (EntryKind::Agent, Some(author), text, _) = stats.last.as_ref()? else {
+                            return None;
+                        };
+                        Some(preview(&format!("{}: {text}", name_of(author))))
+                    });
+                    (activity, last)
+                })
+                .collect()
+        };
+        for (view, (activity, last)) in views
+            .iter_mut()
+            .filter(|view| view.kind == BotKind::Group)
+            .zip(resolved)
+        {
+            if let Some(activity) = activity {
+                view.activity = activity;
+            }
+            if let Some(last) = last {
+                view.last_message = Some(last);
+            }
+        }
+        views
     }
 
     pub async fn bot_view(&self, id: &str) -> CoreResult<BotView> {
@@ -682,44 +717,48 @@ fn new_entry(chat: &str, thread: Option<&str>, kind: EntryKind) -> ChatEntry {
     }
 }
 
+/// The group's busiest member and its runtime: one waiting on the user, else one writing here.
+/// The member id borrows `members`, the runtime borrows `runtime`, so a caller can resolve the
+/// member's name and then move the row's own fields.
+fn busy_member<'r, 'm>(
+    members: &'m [String],
+    runtime: &'r HashMap<String, Runtime>,
+    group: &str,
+) -> Option<(&'r Runtime, &'m str)> {
+    let busy = |wanted: BotStatus| {
+        members.iter().find_map(|member| {
+            let live = runtime.get(member)?;
+            let here = live.lane.as_ref().is_some_and(|lane| lane.chat == group);
+            (here && live.status == wanted).then_some((live, member.as_str()))
+        })
+    };
+    busy(BotStatus::NeedsInput).or_else(|| busy(BotStatus::Working))
+}
+
 /// A roster row: the bot as stored, what it is doing and what its chat last said. A group shows
 /// its busiest member: one waiting on the user, else one writing in the group.
 fn view(
     row: BotRow,
-    names: &HashMap<String, String>,
     runtime: &HashMap<String, Runtime>,
     stats: Option<&BotStats>,
     limits: Vec<LimitWindow>,
 ) -> BotView {
-    let name_of = |id: &str| names.get(id).map_or("Bot", String::as_str);
-    let (live, speaker) = match row.kind {
-        BotKind::Agent => (runtime.get(&row.id), None),
-        BotKind::Group => {
-            let busy = |wanted: BotStatus| {
-                row.members.iter().find_map(|member| {
-                    let live = runtime.get(member)?;
-                    let here = live.lane.as_ref().is_some_and(|lane| lane.chat == row.id);
-                    (here && live.status == wanted).then_some((live, member.as_str()))
-                })
-            };
-            match busy(BotStatus::NeedsInput).or_else(|| busy(BotStatus::Working)) {
-                Some((live, member)) => (Some(live), Some(name_of(member))),
-                None => (None, None),
-            }
-        }
+    let live = match row.kind {
+        BotKind::Agent => runtime.get(&row.id),
+        BotKind::Group => busy_member(&row.members, runtime, &row.id).map(|(live, _)| live),
     };
-    let activity = match (live, speaker) {
-        (Some(live), Some(name)) => format!("{name}: {}", live.activity),
-        (Some(live), None) => live.activity.clone(),
-        (None, _) => String::new(),
+    // A group's activity names a member and its last message names a speaker; [`views`] fills
+    // both once every row's name is known, so no name is copied just to look one up.
+    let activity = match (row.kind, live) {
+        (BotKind::Agent, Some(live)) => live.activity.clone(),
+        _ => String::new(),
     };
     let last = stats.and_then(|stats| stats.last.as_ref());
-    let last_message = last.map(|(kind, author, text, _)| match (row.kind, kind, author) {
-        (BotKind::Group, EntryKind::Agent, Some(author)) => {
-            preview(&format!("{}: {text}", name_of(author)))
-        }
-        _ => preview(text),
-    });
+    let last_message = match (row.kind, last) {
+        (BotKind::Group, Some((EntryKind::Agent, Some(_), _, _))) => None,
+        (_, Some((_, _, text, _))) => Some(preview(text)),
+        _ => None,
+    };
     BotView {
         status: live.map_or(BotStatus::Idle, |live| live.status),
         activity,
