@@ -548,13 +548,6 @@ impl ChatHub {
         Ok(entry)
     }
 
-    /// Show an entry's new text now, without touching the disk: a reply being written.
-    fn stream_entry(&self, entry: &ChatEntry) {
-        self.emit(ChatEvent::Entry {
-            entry: ChatEntry::clone(entry),
-        });
-    }
-
     // MARK: sending
 
     /// Store the user's message and start whoever answers it.
