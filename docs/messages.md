@@ -153,10 +153,10 @@ A bot's agent is whatever provider you pick for it, so Messages is not tied to s
 - Each bot's agent session starts in the bot's workspace, several bots can share one agent at once,
   and such a bot can be asked by other bots and join groups like any other.
 
-An external agent keeps its own loop and tools; silver relays what it says. A turn that holds
-several of the agent's messages — Claude Code writes one per step — shows only the last in the
-chat, which lands whole when the turn ends: the earlier messages are the agent's running commentary,
-not the reply, and are not streamed into the bubble. When it asks leave to act (to edit a file, run
+An external agent keeps its own loop and tools; silver relays what it says. A turn may hold several
+messages — Claude Code writes one per step, a native model writes commentary before each tool call —
+and only the last is the reply: it lands whole when the turn ends, the earlier text being the agent's
+running commentary, never streamed into the bubble. When it asks leave to act (to edit a file, run
 a command), the request is an **approval card** in the bot's chat: *Allow once*, *Always allow* or
 *Deny*. A bot set to *Approve automatically* says yes itself. A card left open when the turn ends,
 by Stop or otherwise, expires and the agent is told no. Stopping a turn also tells the agent to

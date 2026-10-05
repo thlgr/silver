@@ -187,8 +187,8 @@ def scenarios():
     assert next(e for e in entries(coder) if e["kind"] == "permission")["permission"]["status"] == "approved"
     assert said(coder), "the run went on after the approval"
 
-    # The bubble streams all the text written before a tool call, even when the text came in a
-    # burst and the tool then keeps the bot waiting.
+    # A run shows only its final reply, and only once the turn ends: text written before a tool
+    # call is the agent's running commentary and never reaches the bubble.
     live = {}
     seen = set()
     threading.Thread(target=follow_entries, args=(live, seen), daemon=True).start()
@@ -196,7 +196,11 @@ def scenarios():
     writer = bot("Writer", workspace_id=workspace)
     call("POST", f"/v1/chat/bots/{writer}/send", {"text": "tailcut please"})
     until("the card", lambda: roster()["Writer"]["status"] == "needs_input")
-    until("the whole bubble", lambda: "Looking at how limits polls that endpoint." in live.values(), 3)
+    assert not any("Looking at how limits" in text for text in live.values()), "commentary is not streamed"
+    card = next(e for e in entries(writer) if e["kind"] == "permission")
+    call("POST", f"/v1/chat/entries/{card['id']}/answer", {"decision": "approve"})
+    until("writer done", idle("Writer"))
+    assert "Mock reply: you said 'tailcut please'." in live.values(), live
     call("DELETE", f"/v1/chat/bots/{writer}")
     call("DELETE", f"/v1/chat/bots/{coder}")
 

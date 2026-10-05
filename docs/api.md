@@ -127,7 +127,7 @@ Keep-alive is an SSE comment every 15 s.
 | `run.queued` | yes | Run accepted, with session and workspace |
 | `run.started` | yes | Model and start time |
 | `context.updated` | yes | How full the context budget is for the request about to go out; repeated with `prompt_tokens` once the provider has counted |
-| `text.started` | yes | An external agent (Claude Code) began a new message; the text streamed before it is superseded, so only its last message is the reply |
+| `text.started` | yes | An agent began a new message; only its last message is the reply, so the text before it is dropped rather than streamed |
 | `text.delta` | no | Incremental assistant text |
 | `reasoning.delta` | no | Incremental model reasoning; clients show a thinking row and drop it when text or a tool call begins |
 | `text.completed` | yes | Final assistant text |
