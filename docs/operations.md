@@ -75,7 +75,7 @@ token of at least 16 characters, so pass one; the web UI asks for it on first lo
       -v silver-data:/home/silver/.local/share/silver \
       silver
 
-The volume holds `state.db` and managed memory.
+The volume holds `state.db` and the managed ai-memory data.
 [`docker-compose.yml`](../docker-compose.yml) runs the same image with the `silver-data` volume, a
 read-only bind mount of `./config.toml` (which must exist, and must carry `server.bearer_token`
 or be supplemented with `SILVER_BEARER_TOKEN`), port 7777 and `restart: unless-stopped`:

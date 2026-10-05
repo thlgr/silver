@@ -29,7 +29,7 @@ Create crates/silver-protocol as the single home for the shared types:
 
 The crate depends only on serde, serde_json, uuid, chrono and thiserror. It does not depend on
 Axum, tokio-rusqlite, reqwest, silver-core or any binary. silver-core, silver-client and
-silverd all depend on it; silver-core still owns all behaviour (agent loop, tools, memory,
+silverd all depend on it; silver-core still owns all behaviour (agent loop, tools,
 guards), the protocol crate owns shape only.
 
 ## Consequences

@@ -39,6 +39,8 @@ and key. One run per session at a time: a second returns `session_busy`.
 | POST | `/v1/workspaces/pick` | Open the desktop folder dialog on the machine running silver; `{path}`, or `{path: null}` if cancelled; 4xx if there is no dialog |
 | POST | `/v1/workspaces/{id}/attachments` | Store `{name, data}` (base64) under `.silver/attachments/`; 201 `{path, name, bytes}` |
 | GET | `/v1/workspaces/{id}/files?path=…` | One workspace picture (png, jpg, gif, webp) for the UI; confined to the root and capped by `tools.max_output_bytes` |
+| GET | `/v1/workspaces/{id}/memory?q=` | The workspace's shared ai-memory pages (`{workspace, project, pages}`), recent first, or search hits when `q` is given; 503 when memory is off |
+| GET | `/v1/workspaces/{id}/memory/page?path=…` | One memory page's Markdown body, read from the ai-memory server |
 | POST | `/v1/sessions` | Create `{workspace_id?, source?, external_key?, title?}`; 201 |
 | GET | `/v1/sessions?workspace_id=…` or `?scope=global` | Sessions in exactly one scope, newest first; `limit`, `cursor` (`<updated_at>\|<id>`), and `q=` to match titles and message text |
 | GET | `/v1/sessions/{id}` | One session, with its `goal`, `active_run` and `plan_mode` |
@@ -132,7 +134,6 @@ Keep-alive is an SSE comment every 15 s.
 | `tool.completed` | yes | Call id, status (`completed`, `failed`, `denied`, `blocked`) and the result, long strings cut in the middle at 4,000 characters |
 | `approval.required` | yes | Approval id, call id, name, risk, description, argument preview |
 | `approval.resolved` | yes | Approval id and the decision |
-| `memory.changed` | yes | Memory file, operation, post-write hash (no content) |
 | `run.waiting` | yes | Why the turn is waiting: a provider retry, compaction, an iteration-budget notice, a dropped picture, or a model stream silent for 60 s |
 | `steer.delivered` | yes | A queued steer message reached the model |
 | `advisor.checked` | yes | A Jev check: `point` (`start`, `tools`, `answer`), the yes-probability per question, and the hints handed to the model |

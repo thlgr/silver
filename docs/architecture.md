@@ -8,10 +8,10 @@ called out in [Known gaps](#13-known-gaps-between-code-and-spec). User-facing be
 
 ## 1. The daemon-only executor invariant (INV-1)
 
-Only the silver server executes the agent loop, tools, memory and persistence. This is enforced
+Only the silver server executes the agent loop, tools and persistence. This is enforced
 by the dependency graph, not by convention:
 
-- silver-core contains the agent loop, tools, memory and guards. Its Cargo.toml depends on
+- silver-core contains the agent loop, tools and guards. Its Cargo.toml depends on
   silver-protocol, serde, tokio, tokio-util, futures, sha2, hex, tracing, async-trait, regex and
   pdf-extract (plus uuid, chrono and thiserror). It does not depend on Axum, tokio-rusqlite,
   reqwest or any binary crate.
@@ -52,11 +52,11 @@ the single global scope.
 | INV-1 daemon is the only executor | Crate dependency graph (section 1). |
 | INV-2 everything is a client | The web UI is a static bundle that speaks HTTP/SSE; it links no server code. |
 | INV-3 scope is never ambiguous | CreateRunRequest carries Option<WorkspaceId>; Session carries Option<WorkspaceId>. Db::list_sessions and Db::search_messages return an empty result when neither global nor a workspace is given, and use "workspace_id IS ?1" in SQL so NULL matches only NULL. |
-| INV-4 no implicit context crossing | The memory scope and session-search scope come from RunContext; the session_search tool passes ctx.run.scope straight through and ignores any scope argument. find_session_by_external_key matches within one scope only. There is no global-to-workspace memory inheritance. |
+| INV-4 no implicit context crossing | The session-search scope comes from RunContext; the session_search tool passes ctx.run.scope straight through and ignores any scope argument, and find_session_by_external_key matches within one scope only. Memory is not silver's to scope: the ai-memory server resolves its own project and global scopes ([ADR 0002](adr/0002-shared-memory-via-ai-memory.md)). |
 | INV-5 a session never changes workspace | RunManager::resolve_session returns CoreError::SessionWorkspaceMismatch when session.workspace_id != request.workspace_id. There is no update path for a session's workspace. |
 | INV-6 the client never chooses paths in a run | CreateRunRequest has workspace_id but no cwd/path field. Paths enter only inside tool arguments and are resolved by the daemon. |
 | INV-7 file access is confined to the registered root | Workspace::resolve_path / confine_path (section 6). Every workspace tool calls RunContext::require_workspace first. The one path outside the root is the session's plan file, chosen by the daemon (section 12.5). |
-| INV-8 memory is explicit and auditable | Memory changes only through the memory tool's add/replace/remove; a run snapshot is frozen at start; MemoryStore writes temp-file + rename with a per-scope lock. |
+| INV-8 memory is external and shared | silver keeps no memory state of its own. Every run reads and writes through the managed ai-memory server's MCP tools, which also serve the external harnesses in the same workspace ([ADR 0002](adr/0002-shared-memory-via-ai-memory.md)). |
 | INV-9 approvals are decided by the daemon | ApprovalPolicy is daemon-owned; clients only POST a decision for an existing approval_id. The registry rejects an approval that is not pending for that run. |
 | INV-10 the protocol is interface-independent | EventPayload is domain facts (text.delta, tool.started, approval.required, ...); the web UI renders them. |
 
@@ -135,8 +135,8 @@ accepted only for an active run (RunNotActive otherwise) and queues a string dra
 silver-core::agent::Agent::run_turn is the whole loop. The provider is transport only.
 
 1. Emit run.started.
-2. Build the system prompt (base prompt + tool/security policy + workspace instructions + rendered
-   memory) and assemble messages: system, then the newest 8 MiB of persisted history (oldest
+2. Build the system prompt (base prompt + tool/security policy + workspace instructions) and
+   assemble messages: system, then the newest 8 MiB of persisted history (oldest
    first), then the new user message. Compaction decides what of it reaches the model.
 3. Persist the user message before any model call (persist-before-execute). A persistence failure
    ends the run as failed.
@@ -201,7 +201,7 @@ is live (`/v1/advisor`) and saved to config.toml.
 
 Everything else the loop writes for the model, rather than the user or a tool, is emitted as
 `context.injected` with a label and the exact text: the system prompt and each file it loaded
-(project instructions, MEMORY.md, USER.md) when the run starts, then each loop notice where it is
+(project instructions) when the run starts, then each loop notice where it is
 added (tool-guard and subdirectory AGENTS.md text on a tool result; the iteration budget and limit,
 tools turned off, verify-on-stop, truncation, reasoning cut and compaction summary). A client
 shows them in place of guessing, and `/v1/sessions/{id}/injected` returns them, with the advisor
@@ -311,10 +311,10 @@ stub. A Warn appends guidance to the tool result; a Block or Halt becomes a synt
 
 The tool-name sets are aligned with the registry: IDEMPOTENT_TOOL_NAMES includes read_file,
 list_files, search_files, session_search, web_search, web_extract, skill_view and skills_list;
-MUTATING_TOOL_NAMES includes write_file, patch, run_command, bash, execute_code, memory,
+MUTATING_TOOL_NAMES includes write_file, patch, run_command, bash, execute_code,
 todo_list, skill_manage and process_manage; FAILURE_TOLERANT_TOOL_NAMES includes run_command,
 bash, execute_code, process_manage and web_extract; PROGRESS_RESET_TOOL_NAMES includes
-write_file, patch, run_command, bash, execute_code, memory, todo_list and skill_manage.
+write_file, patch, run_command, bash, execute_code, todo_list and skill_manage.
 
 With agent.tool_call_hard_stop = false, before_call always allows and only warning guidance is
 produced. With the default (true), before_call blocks at the
@@ -564,11 +564,11 @@ access.
 
 `ToolRegistry` (`crates/silver-core/src/tool.rs`) is a `Vec<Arc<dyn Tool>>`.
 `silver_core::tools::register_default_tools` (`crates/silver-core/src/tools/mod.rs`)
-registers the 20 concrete tools in module order: `fs` (`read_file`, `list_files`,
+registers the 19 concrete tools in module order: `fs` (`read_file`, `list_files`,
 `search_files`), `vision` (`view_image`), `write` (`write_file`, `patch`), `command`
-(`run_command`), `execute_code`, `bash`, `process` (`process_manage`), `memory`,
+(`run_command`), `execute_code`, `bash`, `process` (`process_manage`),
 `session_search`, `documents` (`search_documents`), `todo`, `skills` (`skills_list`,
-`skill_view`, `skill_manage`), `lsp` and `web` (`web_search`, `web_extract`). The 21st,
+`skill_view`, `skill_manage`), `lsp` and `web` (`web_search`, `web_extract`). The 20th,
 `delegate_task`, needs a subagent runner, so the daemon registers it itself
 (`tools::delegate::register`) when `[delegation] enabled` is true, and the chat's two team tools
 (`tools::team::register`: `list_bots`, `ask_bot`, backed by the `Team` service).
@@ -679,11 +679,7 @@ Minimal run keeps the shared agent and store.
 
 The system prompt follows the tool set: help, enforcement, execution and steering blocks need at
 least one tool; the coding brief swaps file-tool lines for shell lines (or drops them) and yields
-to a no-file-tools note when no files/shell tool is present; MEMORY and USER PROFILE snapshots
-need the `memory` tool. The memory guidance is a short rule to save before replying: a 4B model read
-the longer Hermes memory-vs-skills text as "don't save", and said it would remember without calling
-the tool. The `memory` schema advertises only `target`, `action`, `content` and `old_text`; the
-executor still accepts the Hermes `operations` batch and `new_text` alias. With `bash` and a non-root daemon, a sudo tip tells the model not to
+to a no-file-tools note when no files/shell tool is present. With `bash` and a non-root daemon, a sudo tip tells the model not to
 install anything and to hand the user install commands for the OS named from `/etc/os-release`.
 A 4B model forgets that mid-task, so `bash` repeats the tip as a `note` on the result of a
 sudo or package-manager command, or of output such as `must be root`.
@@ -812,8 +808,8 @@ against the code when this list was last revised.
 
 Not implemented by design: adapters (Telegram, Discord, WhatsApp; the intended design is separate
 processes speaking this HTTP/SSE API with `source` + `external_key` session identity), a plugin
-ABI or WASM host, process sandboxing, semantic or vector memory, global-to-workspace memory
-inheritance, multi-tenant authentication, and an MCP server mode.
+ABI or WASM host, process sandboxing, semantic or vector memory, multi-tenant authentication, and
+an MCP server mode.
 
 ## 14. Behaviour added after the MVP
 
@@ -892,10 +888,12 @@ Each item traces to the Hermes module it ports unless noted; see
   facts stay out of its prompt. An `AGENTS.md` found in a subdirectory is appended to a tool result
   once per directory. The workspace snapshot carries the git branch, upstream, ahead/behind,
   status counts and recent commits.
-- `memory.rs` enforces the Hermes 2200/1375-char final-state budgets, skips duplicate entries and applies
-  a batch through one atomic `SetContent` write. Entries are line-section-line delimited whole
-  blocks; `replace` and `remove` act on a whole entry; writes and loads are scanned; an unreadable
-  file refuses the write, and external drift is snapshotted to `.bak` under a cross-process lock.
+- Memory is the managed ai-memory MCP server (`apps/silver/src/ai_memory.rs`): started on the
+  configured loopback bind when nothing answers there, or adopted if the operator already runs one;
+  registered like any `[[mcp.server]]` entry so every run gets its `memory_*` tools; the installed
+  external harnesses are pointed at the same server with ai-memory's own installers; and the server
+  silver started is stopped on shutdown. silver keeps no memory state of its own
+  ([ADR 0002](adr/0002-shared-memory-via-ai-memory.md)).
 - Skills frontmatter reads `platforms`, `env` and `disabled`; listing gates on the run platform and
   environment, and a sidecar `usage.json` records per-skill view/patch counters.
 

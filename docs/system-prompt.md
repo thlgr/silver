@@ -988,7 +988,7 @@ workspace files are untrusted data).
 | stable | identity (`DEFAULT_BASE_PROMPT`) | always |
 | stable | help pointer (`SILVER_HELP_GUIDANCE`) | the run has tools |
 | stable | `TASK_COMPLETION_GUIDANCE`, `PARALLEL_TOOL_CALL_GUIDANCE` | the run has tools |
-| stable | tool guidance: `MEMORY_GUIDANCE`, `SESSION_SEARCH_GUIDANCE`, `MEDIA_GUIDANCE`, `SKILLS_GUIDANCE` | the matching tool is in the run's tool set (`memory`; `session_search`; `view_image` or `search_documents`; `skill_manage`) |
+| stable | tool guidance: `SESSION_SEARCH_GUIDANCE`, `MEDIA_GUIDANCE`, `SKILLS_GUIDANCE` | the matching tool is in the run's tool set (`session_search`; `view_image` or `search_documents`; `skill_manage`) |
 | stable | sudo tip (`NON_ROOT_SUDO_TIP` plus the OS name) | `bash` is available and the daemon is not root |
 | stable | `TOOL_USE_ENFORCEMENT_GUIDANCE` | the model matches `TOOL_USE_ENFORCEMENT_MODELS` |
 | stable | `GOOGLE_MODEL_OPERATIONAL_GUIDANCE` | as above, and the model is Gemini or Gemma |
@@ -999,7 +999,6 @@ workspace files are untrusted data).
 | context | workspace snapshot (branch, upstream, ahead/behind, status, recent commits) | the run has a workspace |
 | volatile | skills index (`<available_skills>`, descriptions cut at 200 characters) | skills exist |
 | volatile | subagent catalogue (`<available_agents>`) | `delegate_task` is available |
-| volatile | MEMORY and USER PROFILE blocks | the `memory` tool is available |
 | volatile | timestamp line: conversation start date, session id, model, provider, platform | always |
 | volatile | `# Runtime environment`: working directory, platform, OS | always |
 
@@ -1016,24 +1015,13 @@ tool-guard notices are not in the system prompt: they ride the user message or a
 (plan-mode notices as `<system-reminder>` blocks), and each is also emitted as `context.injected`,
 so the cached prefix does not change mid-conversation.
 
-## 7.2 Memory snapshot
-
-The MEMORY and USER PROFILE blocks use the Hermes frame: `MEMORY_BLOCK_HEADER`
-("MEMORY (your personal notes)") and `USER_BLOCK_HEADER` ("USER PROFILE (who the user is)") between
-`═` separators, with the 2,200 and 1,375 character budgets (`MEMORY_CHAR_LIMIT`, `USER_CHAR_LIMIT`).
-Each file is capped at `memory.max_prompt_bytes_per_file` in the prompt. The snapshot is frozen at
-run start, and mid-run writes never change the prompt. `MEMORY_GUIDANCE` is a short rule to save
-before replying: a 4B model read Hermes' longer memory-versus-skills text as "don't save" and said
-it would remember without calling the tool.
-
-## 7.3 Copied, adapted and dropped
+## 7.2 Copied, adapted and dropped
 
 | Hermes text | In silver |
 |---|---|
 | `TASK_COMPLETION_GUIDANCE`, `PARALLEL_TOOL_CALL_GUIDANCE`, `TOOL_USE_ENFORCEMENT_GUIDANCE`, `OPENAI_MODEL_EXECUTION_GUIDANCE`, `GOOGLE_MODEL_OPERATIONAL_GUIDANCE`, `SESSION_SEARCH_GUIDANCE` | copied |
 | `DEFAULT_AGENT_IDENTITY` | replaced by silver's three-line `DEFAULT_BASE_PROMPT` |
 | `HERMES_AGENT_HELP_GUIDANCE` | adapted to a one-line pointer at the project docs and source |
-| `build_memory_guidance` | rewritten as the short `MEMORY_GUIDANCE` above |
 | `SKILLS_GUIDANCE`, skills index preamble | adapted to silver's `skill_manage` actions; the index loads a skill only on a clear match, because "err toward loading" sent small models into skills for tasks that needed none |
 | `CODING_AGENT_GUIDANCE` | adapted: silver's tool names, a shell-only variant (`SHELL_READ_LINE`, `SHELL_EDIT_LINE`) for the Pi preset, and a `patch` miss rule |
 | (no upstream section) | `MEDIA_GUIDANCE` for `view_image` and `search_documents`: without it a small model reads a screenshot's filename and answers from imagination, or greps a PDF's bytes |

@@ -7,7 +7,7 @@ code layout see [architecture.md](architecture.md).
 ## Tool set
 
 One `ToolRegistry` (`crates/silver-core/src/tools/mod.rs`) holds every tool. The daemon registers
-**23 tools**: 20 built in, `delegate_task`, which exists only while `[delegation] enabled` is true,
+**22 tools**: 19 built in, `delegate_task`, which exists only while `[delegation] enabled` is true,
 and the two team tools, which only a bot's session in [Messages](messages.md) is given. `GET /v1/tools` lists them all with their toolset and whether the [filters](#which-tools-a-run-sees)
 leave them `enabled`; `GET /v1/capabilities` lists only the enabled ones.
 
@@ -25,7 +25,6 @@ leave them `enabled`; `GET /v1/capabilities` lists only the enabled ones.
 | `process_manage` | process | yes | `list`, `read`, `wait` or `kill` a background process |
 | `execute_code` | process | yes | Write a snippet to a temp file in the workspace and run it |
 | `lsp` | read (`rename`: write) | yes | Language-server `diagnostics`, `hover`, `definition`, `references`, `symbols`, `rename` |
-| `memory` | memory | no | Add, replace or remove entries in `MEMORY.md` / `USER.md` |
 | `session_search` | read | no | Search past sessions of the same scope |
 | `todo_list` | memory | no | The session's checklist |
 | `skills_list`, `skill_view` | read | no | Discover and load skills |
@@ -34,6 +33,11 @@ leave them `enabled`; `GET /v1/capabilities` lists only the enabled ones.
 | `delegate_task` | read | no | Hand independent tasks to [subagents](#subagents) |
 | `list_bots` | read | no | The user's other [bots](messages.md#bots-asking-each-other): name, what each is for, status, folder |
 | `ask_bot` | read | no | Put a self-contained request to another bot and wait for its final reply (up to ten minutes) |
+
+Memory is not a built-in tool: silver manages an ai-memory server
+([ADR 0002](adr/0002-shared-memory-via-ai-memory.md)), so every run gets its `memory_*` tools
+(`memory_query`, `memory_briefing`, `memory_write_page`, `memory_handoff_*`, …), and every bot and
+external harness in one workspace shares one memory.
 
 A global (workspace-less) run sees only the tools that do not need a workspace; a workspace run
 sees the rest too. Pick a workspace in the web UI, or pass `workspace_id` to `POST /v1/runs`, to
@@ -49,14 +53,14 @@ give the model files and a shell.
   `mode = "patch"` with a unified diff is still accepted. CRLF files keep their line endings and
   edits keep file permissions.
 - `search_files` and `list_files` say when a result was cut at `limit`.
-- A tool never receives a scope from the model: memory, session search and documents use the
-  run's own scope.
+- A tool never receives a scope from the model: session search and documents use the run's own
+  scope.
 
 ### Which tools a run sees
 
 Two filters apply in order, and together they define the built-in **Minimal** preset:
 
-1. **Toolsets** (`core`, `files`, `terminal`, `web`, `memory`, `skills`, `delegation`, `mcp`):
+1. **Toolsets** (`core`, `files`, `terminal`, `web`, `skills`, `delegation`, `mcp`):
    `[tools] default_toolsets` selects them (empty selects all) and `disabled_toolsets`
    subtracts. The default disables `web`, which keeps the `web_search`/`web_extract` schemas out of
    the prompt until you set `disabled_toolsets = []`.
@@ -65,7 +69,7 @@ Two filters apply in order, and together they define the built-in **Minimal** pr
    `process_manage`, `skill_manage` and `skills_list`. `list_files` stays on: without it a small
    model lists a directory with `bash find`, which is a process-risk call and an approval prompt.
 
-A coding agent with file edit, `bash`, `lsp`, `memory` and skill loading costs about 4.2k prompt
+A coding agent with file edit, `bash`, `lsp` and skill loading costs about 4.2k prompt
 tokens. Edit `config.toml` and restart to change the lists
 ([configuration.md](configuration.md#tools)).
 
@@ -119,10 +123,9 @@ message. Settings → Presets creates and edits custom ones.
 
 A custom preset's tool list is the whole selection: the `[tools]` filters define Minimal only.
 Skills are a blacklist ("all except unchecked", new skills on) or a whitelist ("only checked",
-new skills off). The system prompt follows the tools: without `memory` there is no MEMORY or USER
-PROFILE block, a shell-only chat gets shell read/edit lines, and a chat with no file or shell
-tools is told it cannot see files. Approvals, `deny_commands` and path confinement hold for every
-preset. Deleting a preset moves its sessions to Minimal.
+new skills off). The system prompt follows the tools: a shell-only chat gets shell read/edit lines,
+and a chat with no file or shell tools is told it cannot see files. Approvals, `deny_commands` and
+path confinement hold for every preset. Deleting a preset moves its sessions to Minimal.
 
 ## Plan mode
 
@@ -249,8 +252,9 @@ must be valid UTF-8 text; the rest is refused by name. Uploads are bounded by
   `/rollback`, `GET /v1/checkpoints` and `POST /v1/checkpoints/{id}/restore` bring them back.
 - **MCP client** (`[[mcp.server]]`, stdio or http): on startup silver connects, lists tools and
   registers each as `<server>__<tool>` in the `mcp` toolset. They are approval-gated unless the
-  server marks them `readOnlyHint`. stdio children get a filtered environment. Server mode
-  (exposing silver over MCP) is not implemented.
+  server marks them `readOnlyHint`. stdio children get a filtered environment. The managed
+  ai-memory server is registered this way, which is where the `memory_*` tools come from. Server
+  mode (exposing silver over MCP) is not implemented.
 
 ## Not implemented
 

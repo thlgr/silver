@@ -61,7 +61,7 @@ Schema notation used in the tables: a trailing * marks a required field; enums a
 | 31 | browser_exec | tools/browser_use_cli.py:767 BROWSER_EXEC_SCHEMA; register :790 (toolset browser-use) | Run Python with pre-imported browser-use helpers (alternative browser backend). | object{code:string*, session:string, timeout_s:integer(default 300 = _DEFAULT_TIMEOUT_S, max 1800 = _MAX_TIMEOUT_S)}; required=[code] | browser-use CLI (uv tool install browser-use) + terminal toolset + cloud/local browser | YAGNI-DEFER | Requires the browser-use CLI and a browser backend; a second browser backend waits until a first exists, and the whole browser stack is out of scope. |
 | 32 | text_to_speech | tools/tts_tool.py:530 TTS_SCHEMA; register :572 | Convert text to audio and return a MEDIA path / voice bubble. | object{text:string*, output_path:string, speed:number, instructions:string, provider:string}; required=[text] | Provider table: edge (edge-tts/neutts), openai, elevenlabs, deepinfra, minimax, xai, gemini, mistral, neutts, kittentts, piper, plus user command providers; platform voice delivery | YAGNI-DEFER | Audio output and messaging delivery are out of scope. Concrete missing backends: TTS provider + voice delivery adapter. |
 | 33 | todo_list | tools/todo_tool.py:221 TODO_SCHEMA; register :280 | Track a multi-step task checklist. | object{todos:array[{id:string*, content:string*, status:enum{pending,in_progress,completed,cancelled}*, parent:string}], merge:boolean(default false)}; required=[] | Session/turn store only (check_todo_requirements always True) | PORT-1:1 | Self-contained state. Persist per session in SQLite; no external backend. |
-| 34 | memory | tools/memory_tool.py:262 MEMORY_SCHEMA; register :364 | Save durable facts to MEMORY.md / USER.md across sessions. | object{action:enum{add,replace,remove}, target:enum{memory,user}*, content:string, old_text:string, new_text:string, operations:array[{action:enum{add,replace,remove}*, content:string, new_text:string, old_text:string}]}; required=[target]; dynamic override narrows target to enabled stores | Per-profile memory store, char budget, inline executor | PORT-1:1 | Self-contained Markdown store and silver already has memory. Upgrade property names (file->target, operation->action, old->old_text, new->new_text, add operations[] batch + char budget). The profile dimension maps to silver scope; the target-narrowing override is the only PORT-MINIMAL edge. |
+| 34 | memory | tools/memory_tool.py:262 MEMORY_SCHEMA; register :364 | Save durable facts to MEMORY.md / USER.md across sessions. | object{action:enum{add,replace,remove}, target:enum{memory,user}*, content:string, old_text:string, new_text:string, operations:array[{action:enum{add,replace,remove}*, content:string, new_text:string, old_text:string}]}; required=[target]; dynamic override narrows target to enabled stores | The upstream tool is upstream's; silver's equivalent is the managed ai-memory MCP server. | PORT-1:1, retired | silver's Markdown store was built, then retired: memory is the ai-memory server registered over MCP, so every harness in a workspace shares one store (ADR 0002). No silver tool named `memory`. |
 | 35 | session_search | tools/session_search_tool.py:650 SESSION_SEARCH_SCHEMA; register :785 | Recall past conversations: discovery, scroll, read or browse (FTS5). | object{query:string, limit:integer(default 3), sort:enum{newest,oldest}, detail:enum{adaptive,full}(default adaptive), after:string, before:string, exclude_session_ids:array[string](cap 20), session_id:string, around_message_id:integer, window:integer(default 5), role_filter:string, profile:string}; required=[] | SQLite state DB with FTS5 | PORT-MINIMAL | Upstream is already local SQLite, so no SaaS substitution is needed, but the exact surface must be adapted: drop profile (multi-profile is not an MVP concept; scope is workspace/global) and add the discovery/scroll/read/read-shapes. silver currently supports only query + limit. |
 | 36 | clarify | tools/clarify_tool.py:244 CLARIFY_SCHEMA; register :306 | Ask the user one or more questions and receive answers. | object{questions:array*(minItems 1, maxItems 5 = MAX_QUESTIONS)[{question:string*, choices:array[string](maxItems 4 = MAX_CHOICES), multi_select:boolean}]}; required=[questions] | Client UI round-trip (callback) + clarify gateway; event delivery | PORT-1:1 | Self-contained given the run event/approval round-trip the MVP already specifies (approvals + SSE). Reuse the approval response channel; no external backend. |
 | 37 | execute_code | tools/code_execution_tool.py:885 build_execute_code_schema() -> EXECUTE_CODE_SCHEMA :904; register :923 | Run Python that calls tools programmatically in a persistent kernel. | object{code:string*, reset:boolean}; required=[code] | Python interpreter, persistent session kernel (code_kernel.py), generated hermes_tools RPC bindings, optional sandbox backend (vercel_sandbox) | PORT-MINIMAL | Port name + schema and back it with a local Python subprocess/kernel plus a JSON-RPC bridge to the registry; drop remote kernels (code_kernel_remote.py) and the Vercel sandbox. Remote and distributed execution are out of scope, and a sandbox waits for a proven need. |
@@ -128,7 +128,7 @@ These are the TOOLSETS entries whose tools are not (all) in _HERMES_CORE_TOOLS, 
 > against. It is kept for provenance; see [Implementation status](#implementation-status) for what
 > actually shipped.
 
-Verified against crates/silver-core/src/tool.rs and crates/silver-core/src/tools/ (mod.rs registers fs, write, command, memory, session_search). At the time of the analysis silver shipped **8 tools**: read_file, list_files, search_text, write_file, apply_patch, run_command, memory, session_search.
+Verified against crates/silver-core/src/tool.rs and crates/silver-core/src/tools/ (mod.rs registers fs, write, command, memory, session_search). At the time of the analysis silver shipped **8 tools**: read_file, list_files, search_text, write_file, apply_patch, run_command, memory, session_search. The `memory` tool was later retired; memory now comes from the ai-memory MCP server (see [Implementation status](#implementation-status)).
 
 | Hermes core tool | silver tool (file) | Match | Gap / change needed for 1:1 |
 | --- | --- | --- | --- |
@@ -180,9 +180,9 @@ Grouped PORT-1:1 and PORT-MINIMAL tools, with the shared backend each workstream
 - Shared backend: a local Python interpreter + persistent kernel process, a JSON-RPC tool bridge that exposes the ToolRegistry functions to generated Python bindings, and the same filtered environment as terminal. No remote kernels and no Vercel sandbox.
 - New code: tools/code_execution.rs + a Python bridge script. No existing file to extend.
 
-### G. Memory and recall (already present; upgrade to 1:1) - memory, session_search
-- Shared backend: the Markdown memory store (memory.rs / MemoryStore) and the SQLite FTS session store (session_search.rs / SessionSearch).
-- Existing to extend: tools/memory.rs (rename args, add operations[] + char budget), tools/session_search.rs (add the discovery/scroll/read/browse shapes and filters; drop profile).
+### G. Recall (already present; upgrade to 1:1) - session_search
+- Shared backend: the SQLite FTS session store (session_search.rs / SessionSearch). The Markdown memory store (memory.rs / MemoryStore) that once backed `memory` was retired in favour of the managed ai-memory server.
+- Existing to extend: tools/session_search.rs (add the discovery/scroll/read/browse shapes and filters; drop profile).
 
 ### Deferred (not in any MVP workstream)
 - Browser stack (browser_navigate/snapshot/click/type/scroll/back/press/get_images/vision/console/cdp/dialog, all browser_vault_*, browser_exec): needs a browser engine + agent-browser/CDP or cloud provider; vault needs OS keychain + password managers.
@@ -195,10 +195,11 @@ Grouped PORT-1:1 and PORT-MINIMAL tools, with the shared backend each workstream
 ## Implementation status
 
 Verified against the live registry (`crates/silver-core/src/tools/mod.rs` plus each module's
-`register` function); the daemon registers **23 tools** (20 built in, `delegate_task`, and the chat's `list_bots` and
+`register` function); the daemon registers **22 tools** (19 built in, `delegate_task`, and the chat's `list_bots` and
 `ask_bot`, which have no upstream counterpart), and
 `GET /v1/capabilities` lists the ones the `[tools]` filters leave enabled. Every PORT-1:1 and
-PORT-MINIMAL row in section 1 is implemented except `clarify`.
+PORT-MINIMAL row in section 1 is implemented except `clarify`, and the `memory` row was retired in
+favour of the managed ai-memory server (ADR 0002).
 
 | # | Hermes tool | Decision | Status | Rust file(s) |
 | --- | --- | --- | --- | --- |
@@ -214,7 +215,7 @@ PORT-MINIMAL row in section 1 is implemented except `clarify`.
 | 12 | skill_view | PORT-1:1 | implemented | crates/silver-core/src/tools/skills.rs; apps/silver/src/skills.rs |
 | 13 | skill_manage | PORT-MINIMAL | implemented | crates/silver-core/src/tools/skills.rs; apps/silver/src/skills.rs |
 | 33 | todo_list | PORT-1:1 | implemented | crates/silver-core/src/tools/todo.rs; apps/silver/src/todo_store.rs |
-| 34 | memory | PORT-1:1 | implemented | crates/silver-core/src/tools/memory.rs; apps/silver/src/memory_fs.rs |
+| 34 | memory | PORT-1:1 | retired: memory comes from the managed ai-memory MCP server (`memory_*` tools), not a silver tool (ADR 0002) | — |
 | 35 | session_search | PORT-MINIMAL | implemented | crates/silver-core/src/tools/session_search.rs; apps/silver/src/session_search.rs |
 | 36 | clarify | PORT-1:1 | **not implemented** | — |
 | 38 | delegate_task | PARTIAL | implemented without the `action` surface (`list`/`steer`/`stop`): a `tasks` batch runs in the foreground to a report | crates/silver-core/src/tools/delegate.rs; apps/silver/src/subagents.rs |
@@ -250,5 +251,5 @@ and section 2 is unchanged, except `process_manage` as described above.
 - Output file: docs/tool-port-matrix.md (this file).
 - Upstream toolsets.py: 485 lines, _HERMES_CORE_TOOLS = 59 entries (AST-verified, no duplicates).
 - Upstream tools/ directory: 266 files.
-- The Implementation status section was verified against the live registry: 23 tools registered,
+- The Implementation status section was verified against the live registry: 22 tools registered,
   `clarify` the only unimplemented PORT-1:1 row.

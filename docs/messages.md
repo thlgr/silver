@@ -35,7 +35,9 @@ workspace in the workbench leaves its bots without one.
 A bot is not a new kind of agent. Each of its turns is an ordinary silver run, in a session the
 daemon keeps for it (source `chat`, never listed in the workbench). The session is pinned to the
 bot's model and workspace; the instructions go in through the run's external context. So the loop,
-tools, approvals, memory and providers are exactly the workbench's. **New session** gives the bot a
+tools, approvals and providers are exactly the workbench's. Memory belongs to the workspace, not
+the bot: every bot and every external harness in one workspace goes through the same ai-memory
+server, so what one of them records the rest can read. **New session** gives the bot a
 fresh context and leaves the chat alone; changing its workspace does the same, because a session
 never changes workspace.
 
@@ -87,6 +89,16 @@ other; 64 requests can wait at once, and one waits at most ten minutes, queue ti
 Stopping the asking bot withdraws its requests; stopping the asked bot releases the asker with an
 error. A failed request is an error, never a made-up answer, and is not retried.
 
+## Memory
+
+Memory belongs to the **workspace**, not the bot: every bot in one workspace, and every external
+harness silver wires to the same ai-memory server, reads and writes the same store. A bot's
+`memory_*` tools are the shared ones, so a fact one agent learns is there for the others.
+
+The **brain** button in a conversation header opens what this workspace remembers: the pages
+ai-memory compiled, newest first, searchable, and readable in place. It is read-only — the agents
+write memory themselves as they work.
+
 ## Approvals, notifications, attachments
 
 - A tool that needs approval shows an **approval card** in the chat — *Wants to run a command*, with
@@ -106,8 +118,9 @@ saying "N new" under its message.
 
 ## The window
 
-Wide windows show the roster, the chat, and a panel that is an open thread, or the bot's details
-(or a group's members) when you tap the conversation's title. Under 680 pixels beside the roster a panel opens over the chat; at
+Wide windows show the roster, the chat, and a panel that is an open thread, the bot's details
+(or a group's members) when you tap the conversation's title, or the workspace's shared memory
+(the brain button) when the bot has one. Under 680 pixels beside the roster a panel opens over the chat; at
 phone width the roster and the chat take turns. On a message, right click (or press and hold) for
 reactions, copy, reply in thread and *Show what it did*; on a desktop pointer the same actions
 appear beside its time while it is hovered. The window follows the system light or dark
