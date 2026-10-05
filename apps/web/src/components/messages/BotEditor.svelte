@@ -1,8 +1,7 @@
 <!-- Create a bot or change one: its face, what it is for, which agent runs it and where, and
      whether it asks before acting. Sections use Codync's card look. -->
 <script>
-  import { addWorkspace, app, listModels } from '../../lib/state.svelte.js'
-  import { api } from '../../lib/api.js'
+  import { addWorkspace, app, listModels, openFolderDialog } from '../../lib/state.svelte.js'
   import { COLORS, SHAPES } from '../../lib/avatar.js'
   import { deleteBot, saveBot, select } from '../../lib/chat.svelte.js'
   import Avatar from './Avatar.svelte'
@@ -93,7 +92,7 @@
   async function addFolder(typed) {
     problem = ''
     try {
-      const picked = typed ?? (await api('/v1/workspaces/pick', { method: 'POST' })).path
+      const picked = typed ?? (await openFolderDialog())
       if (!picked) return
       draft.workspace_id = (await addWorkspace(picked)).id
       typing = false

@@ -1,7 +1,6 @@
 <script>
   import { tick } from 'svelte'
-  import { api } from '../lib/api.js'
-  import { app, newSession, openSession, deleteSession, addWorkspace, removeWorkspace, searchSessions } from '../lib/state.svelte.js'
+  import { app, newSession, openSession, deleteSession, addWorkspace, removeWorkspace, openFolderDialog, searchSessions } from '../lib/state.svelte.js'
   import { ago, sessionLabel } from '../lib/format.js'
   import ConfirmButton from './ConfirmButton.svelte'
   import IconPen from '~icons/lucide/square-pen'
@@ -106,7 +105,7 @@
     problem = ''
     picking = true
     try {
-      const picked = (await api('/v1/workspaces/pick', { method: 'POST' })).path
+      const picked = await openFolderDialog()
       if (picked) {
         path = picked
         await save()

@@ -247,6 +247,13 @@ export async function deletePreset(preset) {
   if (app.session?.preset === preset.id) app.session = await api(`/v1/sessions/${app.session.id}`)
 }
 
+/** Ask silver to open the machine's folder dialog; the chosen absolute path, or null when the
+ *  user cancelled. Throws when the machine running silver has no dialog to open, so the caller
+ *  can offer to type the path instead. */
+export async function openFolderDialog() {
+  return (await api('/v1/workspaces/pick', { method: 'POST' })).path
+}
+
 /** Throws on a bad path, so the form can show why beside its field. */
 export async function addWorkspace(path, name) {
   const folder = path.split('/').filter(Boolean).at(-1) ?? path

@@ -1,8 +1,7 @@
 <!-- The roster: bots and groups under the workspace they belong to, then those without one; in
      each, pinned on top, then the newest conversation. -->
 <script>
-  import { app, addWorkspace, removeWorkspace } from '../../lib/state.svelte.js'
-  import { api } from '../../lib/api.js'
+  import { app, addWorkspace, removeWorkspace, openFolderDialog } from '../../lib/state.svelte.js'
   import { chat, deleteBot, markRead, newSession, roster, select, setPinned } from '../../lib/chat.svelte.js'
   import BotRow from './BotRow.svelte'
   import Menu from './Menu.svelte'
@@ -78,7 +77,7 @@
           label: 'Remove workspace',
           icon: IconTrash,
           danger: true,
-          run: () => (ask = { title: `Remove ${section.name}?`, message: 'The folder stays on disk. Its bots and groups move to No workspace.', danger: true, action: { label: 'Remove', run: () => removeWorkspace(section.key) } }),
+          run: () => (ask = { title: `Remove ${section.name}?`, message: 'The folder stays on disk, but every session and "Full conversation" transcript recorded in it is deleted. Its bots and groups move to No workspace.', danger: true, action: { label: 'Remove', run: () => removeWorkspace(section.key) } }),
         },
       ],
     }
@@ -107,7 +106,7 @@
   // sheet is where one is typed when it cannot.
   async function chooseFolder() {
     try {
-      const picked = (await api('/v1/workspaces/pick', { method: 'POST' })).path
+      const picked = await openFolderDialog()
       if (picked) {
         folder.path = picked
         await saveFolder()
