@@ -31,6 +31,10 @@ use silver_protocol::providers::ProviderKind;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
+use tokio_util::sync::CancellationToken;
+
+/// How long a graceful shutdown waits for connections the streams did not close.
+const SHUTDOWN_GRACE: Duration = Duration::from_secs(5);
 
 #[derive(Parser, Debug)]
 #[command(name = "silver", version, about = "silver agent: HTTP API and web UI")]
@@ -166,6 +170,7 @@ async fn main() -> anyhow::Result<()> {
         context_resolver: Some(context_resolver),
         advisor: Some(advisor),
         agents: Some(agent_store),
+        shutdown: CancellationToken::new(),
     };
 
     serve(state, &config, &runs, &data_dir).await?;
@@ -239,7 +244,10 @@ async fn serve(
         .with_context(|| format!("bind {}", config.server.bind))?;
     tracing::info!(bind = %config.server.bind, data_dir = %data_dir.display(), "silver listening");
 
-    axum::serve(
+    // A client still connected would otherwise hold the graceful shutdown open: the run and
+    // chat streams watch this token and end with the signal.
+    let shutdown = state.shutdown.clone();
+    let serving = axum::serve(
         listener,
         api::router(state).into_make_service_with_connect_info::<std::net::SocketAddr>(),
     )
@@ -247,13 +255,26 @@ async fn serve(
         // Stop runs as soon as the signal arrives: their event streams hold connections
         // open, and a graceful shutdown waits for every connection to close.
         let runs = Arc::clone(runs);
+        let shutdown = shutdown.clone();
         async move {
             shutdown_signal().await;
             runs.shutdown().await;
+            shutdown.cancel();
         }
-    })
-    .await
-    .context("serve")?;
+    });
+
+    tokio::select! {
+        result = serving => result.context("serve")?,
+        // The streams end on the token, so the server normally stops at once; this is the
+        // backstop for a connection that never closes.
+        () = async {
+            shutdown.cancelled().await;
+            tokio::time::sleep(SHUTDOWN_GRACE).await;
+        } => tracing::warn!(
+            "a connection did not close within {}s; stopping anyway",
+            SHUTDOWN_GRACE.as_secs()
+        ),
+    }
     Ok(())
 }
 

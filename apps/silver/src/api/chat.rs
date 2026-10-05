@@ -8,7 +8,7 @@ use axum::{
     response::sse::{Event, KeepAlive, Sse},
     Json,
 };
-use futures::Stream;
+use futures::{Stream, StreamExt};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use silver_protocol::chat::{
@@ -140,7 +140,8 @@ fn frame(event: &ChatEvent) -> Event {
 pub async fn events(
     State(state): State<AppState>,
 ) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
-    let stream = futures::stream::unfold(state.chat.subscribe(), |mut events| async move {
+    let AppState { chat, shutdown, .. } = state;
+    let stream = futures::stream::unfold(chat.subscribe(), |mut events| async move {
         let event = match events.recv().await {
             Ok(event) => event,
             Err(RecvError::Lagged(_)) => ChatEvent::Resync,
@@ -148,7 +149,9 @@ pub async fn events(
         };
         Some((Ok::<Event, Infallible>(frame(&event)), events))
     });
-    Sse::new(stream).keep_alive(
+    // The sender lives for the whole process, so this stream would otherwise never end and
+    // hold the graceful shutdown open.
+    Sse::new(stream.take_until(shutdown.cancelled_owned())).keep_alive(
         KeepAlive::new()
             .interval(Duration::from_secs(15))
             .text("keep-alive"),

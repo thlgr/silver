@@ -41,6 +41,7 @@ use silver_core::error::CoreError;
 use silver_core::redact::redact;
 use silver_protocol::{ApiError, ErrorCode};
 use std::sync::Arc;
+use tokio_util::sync::CancellationToken;
 use tower_http::cors::{AllowOrigin, CorsLayer};
 use tower_http::limit::RequestBodyLimitLayer;
 use tower_http::trace::TraceLayer;
@@ -73,6 +74,9 @@ pub struct AppState {
     pub agents: Option<Arc<crate::subagents::AgentStore>>,
     /// The bot chat behind /v1/chat.
     pub chat: Arc<crate::chat::ChatHub>,
+    /// Cancelled on SIGINT/SIGTERM so every long-lived stream ends and the graceful shutdown
+    /// does not wait for a client still connected.
+    pub shutdown: CancellationToken,
 }
 
 #[derive(Debug)]
