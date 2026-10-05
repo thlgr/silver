@@ -2,7 +2,6 @@
 //! modes, each spawning its own CLI found on the login shell's PATH plus the usual install dirs.
 //! Only local-CLI launch is supported: no registry downloads.
 
-use std::collections::HashSet;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, PoisonError};
@@ -243,7 +242,7 @@ fn login_shell_path() -> Option<String> {
                 std::thread::sleep(Duration::from_millis(50))
             }
             _ => {
-                let _ = child.kill();
+                drop(child.kill());
                 return None;
             }
         }
@@ -312,7 +311,6 @@ fn well_known_dirs() -> Vec<PathBuf> {
 /// Re-detects the search path and exports it as this process's PATH, so every agent we spawn
 /// (and the node/npx they need) resolves the same way. Called at startup, before any run.
 pub fn hydrate_path() {
-    let mut seen = HashSet::new();
     let mut path: Vec<PathBuf> = vec![];
     let current = std::env::var("PATH").unwrap_or_default();
     let login = login_shell_path().unwrap_or_default();
@@ -320,7 +318,7 @@ pub fn hydrate_path() {
         .chain(std::env::split_paths(&login))
         .chain(well_known_dirs())
     {
-        if dir.as_os_str().is_empty() || !dir.is_dir() || !seen.insert(dir.clone()) {
+        if dir.as_os_str().is_empty() || !dir.is_dir() || path.contains(&dir) {
             continue;
         }
         path.push(dir);
@@ -403,6 +401,7 @@ pub fn command_for(id: &str) -> Result<Option<String>, CoreError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashSet;
 
     #[test]
     fn claude_runs_through_its_adapter() {

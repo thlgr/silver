@@ -233,13 +233,13 @@ impl ChatHub {
                 // The last reading stands until the next round.
                 Some(Err(error)) => {
                     let reason = format!("{error:#}");
-                    let seen = self
-                        .state()
-                        .limit_errors
-                        .insert(provider.to_string(), reason.clone());
-                    if seen.as_ref() != Some(&reason) {
+                    let changed = self.state().limit_errors.get(provider.as_ref()) != Some(&reason);
+                    if changed {
                         tracing::warn!(%provider, "usage limits could not be read: {reason}");
                     }
+                    self.state()
+                        .limit_errors
+                        .insert(provider.to_string(), reason);
                     continue;
                 }
             };
