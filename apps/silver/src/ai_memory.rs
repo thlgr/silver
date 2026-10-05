@@ -23,10 +23,9 @@ const START_TIMEOUT: Duration = Duration::from_secs(20);
 const POLL_EVERY: Duration = Duration::from_millis(250);
 /// The producer name silver sends as `extension`, and its identity in the ingest key.
 const PRODUCER: &str = "silver";
-/// The agent kind silver reports on the wire. ai-memory keeps a tool call's content only for the
-/// agent kinds it has a verified shape for, and silver posts the Claude Code shape
-/// (`tool_name`/`tool_input`/`tool_response`), so it reports as `claude-code` and keeps the truth
-/// in `extension=silver`. A kind of its own upstream would let it report honestly.
+/// The agent kind silver reports on the wire. ai-memory keeps tool content only for the kinds it
+/// has a verified shape for, and silver posts Claude Code's, so it reports as `claude-code` and
+/// keeps the truth in `extension=silver` until it has a kind of its own upstream.
 const WIRE_AGENT: &str = "claude-code";
 /// ai-memory takes at most this many events in one `/hook/batch`; a fuller queue drops events.
 const BATCH_MAX: usize = 256;
