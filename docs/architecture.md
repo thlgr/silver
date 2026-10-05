@@ -56,7 +56,7 @@ the single global scope.
 | INV-5 a session never changes workspace | RunManager::resolve_session returns CoreError::SessionWorkspaceMismatch when session.workspace_id != request.workspace_id. There is no update path for a session's workspace. |
 | INV-6 the client never chooses paths in a run | CreateRunRequest has workspace_id but no cwd/path field. Paths enter only inside tool arguments and are resolved by the daemon. |
 | INV-7 file access is confined to the registered root | Workspace::resolve_path / confine_path (section 6). Every workspace tool calls RunContext::require_workspace first. The one path outside the root is the session's plan file, chosen by the daemon (section 12.5). |
-| INV-8 memory is external and shared | silver keeps no memory state of its own. Every run reads and writes through the managed ai-memory server's MCP tools, which also serve the external harnesses in the same workspace ([ADR 0002](adr/0002-shared-memory-via-ai-memory.md)). |
+| INV-8 memory is external and shared | silver keeps no memory state of its own. Every run reads and writes through the managed ai-memory server's MCP tools, and a native run is captured into it as a lifecycle producer; both also serve the external harnesses in the same workspace ([ADR 0002](adr/0002-shared-memory-via-ai-memory.md)). |
 | INV-9 approvals are decided by the daemon | ApprovalPolicy is daemon-owned; clients only POST a decision for an existing approval_id. The registry rejects an approval that is not pending for that run. |
 | INV-10 the protocol is interface-independent | EventPayload is domain facts (text.delta, tool.started, approval.required, ...); the web UI renders them. |
 
@@ -890,9 +890,10 @@ Each item traces to the Hermes module it ports unless noted; see
   status counts and recent commits.
 - Memory is the managed ai-memory MCP server (`apps/silver/src/ai_memory.rs`): started on the
   configured loopback bind when nothing answers there, or adopted if the operator already runs one;
-  registered like any `[[mcp.server]]` entry so every run gets its `memory_*` tools; the installed
-  external harnesses are pointed at the same server with ai-memory's own installers; and the server
-  silver started is stopped on shutdown. silver keeps no memory state of its own
+  registered like any `[[mcp.server]]` entry so every run gets its `memory_*` tools; a run on a
+  native provider reports its prompt, tool calls and end to `/hook/batch` from the run manager's
+  event drain (`MemoryHooks`); and the server silver started is stopped on shutdown, after the
+  queued events are delivered. silver keeps no memory state of its own
   ([ADR 0002](adr/0002-shared-memory-via-ai-memory.md)).
 - Skills frontmatter reads `platforms`, `env` and `disabled`; listing gates on the run platform and
   environment, and a sidecar `usage.json` records per-skill view/patch counters.

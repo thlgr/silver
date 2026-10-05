@@ -320,8 +320,6 @@ pub struct MemoryConfig {
     pub bind: String,
     /// The ai-memory data directory; defaults under silver's own data directory.
     pub data_dir: Option<PathBuf>,
-    /// Whether to wire installed external harnesses (Claude Code, OpenCode, …) to the server.
-    pub install_harnesses: bool,
 }
 
 impl Default for MemoryConfig {
@@ -331,7 +329,6 @@ impl Default for MemoryConfig {
             binary: None,
             bind: "127.0.0.1:49374".to_string(),
             data_dir: None,
-            install_harnesses: true,
         }
     }
 }

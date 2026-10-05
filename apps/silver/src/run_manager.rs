@@ -1,5 +1,6 @@
 //! Active run registry, cancellation, approvals and event publishing.
 
+use crate::ai_memory::{MemoryHooks, RunCapture};
 use crate::approval_memory::ApprovalMemory;
 use crate::config::{ApprovalMode, Config};
 use crate::db::{ApprovalRecord, ApprovalStatus, Db, DbError};
@@ -27,7 +28,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use tokio::sync::{broadcast, oneshot, RwLock, Semaphore};
+use tokio::sync::{broadcast, mpsc, oneshot, RwLock, Semaphore};
 use tokio_util::sync::CancellationToken;
 
 #[derive(Default)]
@@ -663,6 +664,8 @@ pub struct RunManager {
     /// Credential store, when the daemon has one. It decides the default model: a provider
     /// signed in through `/login` serves its own model, not config.toml's.
     auth: std::sync::OnceLock<Arc<crate::auth::AuthStore>>,
+    /// Where runs on a native provider report to ai-memory, when memory is on.
+    memory: std::sync::OnceLock<MemoryHooks>,
 }
 
 /// Opens every /goal continuation run.
@@ -784,6 +787,7 @@ impl RunManager {
             estop_path,
             plans_dir,
             auth: std::sync::OnceLock::new(),
+            memory: std::sync::OnceLock::new(),
         })
     }
 
@@ -791,6 +795,14 @@ impl RunManager {
     /// ignored so the manager can never swap stores under an in-flight run.
     pub fn with_auth(self: Arc<Self>, auth: Arc<crate::auth::AuthStore>) -> Arc<Self> {
         drop(self.auth.set(auth));
+        self
+    }
+
+    /// Attach where runs report to ai-memory. Called once at startup, like [`Self::with_auth`].
+    pub fn with_memory(self: Arc<Self>, memory: Option<MemoryHooks>) -> Arc<Self> {
+        if let Some(memory) = memory {
+            drop(self.memory.set(memory));
+        }
         self
     }
 
@@ -1496,7 +1508,7 @@ impl RunManager {
     }
 
     /// Run the admitted turn to completion and record its outcome.
-    async fn execute_run(self: Arc<Self>, task: RunTask) {
+    async fn execute_run(self: Arc<Self>, mut task: RunTask) {
         let _permit = self.permits.acquire().await.ok();
         let started = Utc::now();
         drop(self.db.start_run(task.run_id, started).await);
@@ -1526,6 +1538,16 @@ impl RunManager {
                 &platform,
             )
             .await;
+        let history = sanitize_replay_history(
+            self.db
+                .recent_messages(session_id, REPLAY_HISTORY_BYTES)
+                .await
+                .unwrap_or_default(),
+        );
+        let title_seed = task.input.plain_text();
+        let capture = self
+            .open_capture(&mut task, history.is_empty(), &title_seed)
+            .await;
         let ctx = Arc::new(RunContext {
             run_id,
             scope,
@@ -1544,33 +1566,13 @@ impl RunManager {
             external_context: task.external_context,
         });
 
-        let history = sanitize_replay_history(
-            self.db
-                .recent_messages(session_id, REPLAY_HISTORY_BYTES)
-                .await
-                .unwrap_or_default(),
-        );
-        let (emitter, mut receiver) = EventEmitter::channel(run_id);
+        let (emitter, receiver) = EventEmitter::channel(run_id);
         emitter.emit(EventPayload::RunQueued {
             session_id,
             workspace_id,
         });
-        let broadcast_tx = task.broadcast_tx;
-        let manager = Arc::clone(&self);
-        let drain = tokio::spawn(async move {
-            while let Some(event) = receiver.recv().await {
-                let _guard = manager.event_lock.lock().await;
-                if event.payload.is_replayable() {
-                    drop(manager.db.append_event(&event).await);
-                }
-                if matches!(event.payload, EventPayload::PlanModeExited) {
-                    drop(manager.db.set_session_plan_mode(session_id, false).await);
-                }
-                drop(broadcast_tx.send(event));
-            }
-        });
+        let drain = self.pump_events(receiver, task.broadcast_tx, session_id, capture);
 
-        let title_seed = task.input.plain_text();
         let transcript: Arc<dyn TranscriptSink> =
             Arc::new(DbTranscript::new(Db::clone(&self.db), Some(title_seed)));
         let outcome = task
@@ -1585,7 +1587,10 @@ impl RunManager {
                 transcript,
             )
             .await;
-        drop(drain.await);
+        // Queued before the run leaves the registry, so a shutdown that waits for runs sees it.
+        if let Some(capture) = drain.await.ok().flatten() {
+            capture.finish();
+        }
 
         let status = self
             .finalize_run(run_id, session_id, &task.model, outcome)
@@ -1599,6 +1604,59 @@ impl RunManager {
             }
             _ => {}
         }
+    }
+
+    /// Persist and publish the run's events as they arrive, showing each to the capture. The
+    /// task hands the capture back once the run's events end.
+    fn pump_events(
+        self: &Arc<Self>,
+        mut receiver: mpsc::UnboundedReceiver<silver_protocol::RunEvent>,
+        broadcast_tx: broadcast::Sender<silver_protocol::RunEvent>,
+        session_id: SessionId,
+        mut capture: Option<RunCapture>,
+    ) -> tokio::task::JoinHandle<Option<RunCapture>> {
+        let manager = Arc::clone(self);
+        tokio::spawn(async move {
+            while let Some(event) = receiver.recv().await {
+                let _guard = manager.event_lock.lock().await;
+                if event.payload.is_replayable() {
+                    drop(manager.db.append_event(&event).await);
+                }
+                if matches!(event.payload, EventPayload::PlanModeExited) {
+                    drop(manager.db.set_session_plan_mode(session_id, false).await);
+                }
+                if let Some(capture) = capture.as_mut() {
+                    capture.observe(&event.payload);
+                }
+                drop(broadcast_tx.send(event));
+            }
+            capture
+        })
+    }
+
+    /// Start reporting the run to ai-memory: its prompt, as the first of its session when
+    /// `new_session`, which also puts the project's pending handoff into the run's context. Only a
+    /// workspace run on a native provider is reported; an ACP agent has its own hooks, and
+    /// capturing it here too would store every event twice.
+    async fn open_capture(
+        &self,
+        task: &mut RunTask,
+        new_session: bool,
+        prompt: &str,
+    ) -> Option<RunCapture> {
+        let memory = self.memory.get().filter(|_| native_loop(&task.provider))?;
+        let workspace = task.workspace.as_ref()?;
+        let capture = memory.run(task.session_id, task.run_id, &workspace.canonical_root);
+        if new_session {
+            if let Some(handoff) = memory.handoff(&capture).await {
+                task.external_context = Some(match task.external_context.take() {
+                    Some(context) => format!("{context}\n\n{handoff}"),
+                    None => handoff,
+                });
+            }
+        }
+        capture.begin(new_session, prompt);
+        Some(capture)
     }
 
     /// The subagent catalogue and skills index rendered into the prompt for this run.
@@ -1883,6 +1941,13 @@ impl RunManager {
     }
 }
 
+/// Whether silver's own loop runs this provider's tools, rather than an external ACP agent that
+/// runs its own.
+fn native_loop(provider: &str) -> bool {
+    silver_protocol::providers::preset(provider)
+        .is_none_or(|preset| preset.kind != silver_protocol::providers::ProviderKind::Acp)
+}
+
 /// The 202 body for an admitted or replayed run.
 fn run_created_response(run: &Run) -> RunCreatedResponse {
     RunCreatedResponse {
@@ -2009,4 +2074,16 @@ fn merge_consecutive_roles(messages: Vec<Message>) -> Vec<Message> {
         merged.push(message);
     }
     merged
+}
+
+#[cfg(test)]
+mod tests {
+    use super::native_loop;
+
+    #[test]
+    fn only_an_acp_agent_runs_its_own_loop() {
+        assert!(native_loop("anthropic"));
+        assert!(native_loop("a-provider-not-in-the-catalog"));
+        assert!(!native_loop("claude"));
+    }
 }

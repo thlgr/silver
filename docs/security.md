@@ -273,7 +273,9 @@ executes untrusted code, and is out of scope.
   `[[mcp.server]]` entries run the programs you list with a filtered environment, and an `http`
   server receives whatever its tools are called with. The managed ai-memory server is one of these:
   silver starts it on a loopback bind (or adopts one already there), and memory written from a run
-  goes to it over HTTP.
+  goes to it over HTTP. So does what a native run does: its prompts, and each tool call's
+  redacted argument preview and result summary, are posted to the server's `/hook/batch`. An
+  external ACP agent is not captured by silver. `[memory] enabled = false` stops all of it.
 
 ## 10. Security-relevant configuration
 
