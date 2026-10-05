@@ -86,7 +86,9 @@ def main():
         f.write(
             f'[model]\nprovider = "custom"\nkind = "openai_compatible"\nname = "mock-model"\n'
             f'base_url = "http://127.0.0.1:{MOCK_PORT}/v1"\napi_key_env = "SILVER_API_KEY"\n\n'
-            "[tools]\nwrite_requires_approval = false\ncommand_requires_approval = true\n"
+            "[tools]\nwrite_requires_approval = false\ncommand_requires_approval = true\n\n"
+            # Never adopt a real ai-memory on 49374: this script must not write to a real store.
+            "[memory]\nenabled = false\n"
         )
     with open(os.path.join(config, "secrets.env"), "w") as f:
         f.write("SILVER_API_KEY=dummy\n")

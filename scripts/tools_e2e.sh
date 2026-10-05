@@ -27,6 +27,10 @@ api_key_env = "SILVER_API_KEY"
 [tools]
 write_requires_approval = false
 command_requires_approval = false
+
+# Never adopt a real ai-memory on 49374: this script must not write to a real store.
+[memory]
+enabled = false
 EOF
 printf 'SILVER_API_KEY=dummy\n' > "$CFG/secrets.env"
 SILVER_CONFIG_DIR="$CFG" ./target/debug/silver --bind 127.0.0.1:$DPORT --data-dir "$DATA" >/tmp/silver-tools-daemon.log 2>&1 &
