@@ -31,8 +31,6 @@ pub struct ToolServices {
     /// Extra parent environment variables a tool-spawned child may keep, on top of
     /// `tools::command::PRESERVED_ENV`. Empty means the allow-list alone.
     pub env_passthrough: Vec<String>,
-    /// Present for every run; supplied by the daemon memory store.
-    pub memory: Option<Arc<dyn crate::memory::MemoryStore>>,
     /// Present for every run; applies the scope filter itself.
     pub session_search: Option<Arc<dyn crate::session::SessionSearch>>,
     /// Absent when the daemon has no document store; the search_documents tool then says so.

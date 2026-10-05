@@ -5,13 +5,12 @@ use clap::Parser;
 use silver::api::{self, AppState};
 use silver::auth::AuthStore;
 use silver::checkpoints::Checkpoints;
-use silver::config::Config;
+use silver::config::{Config, McpServerConfig};
 use silver::credential_pool::{CredentialPoolModel, PoolStrategy};
 use silver::db::Db;
 use silver::document_index::DbDocumentIndex;
 use silver::fallback::FallbackModel;
 use silver::mcp::McpManager;
-use silver::memory_fs::FsMemoryStore;
 use silver::oauth::OAuthManager;
 use silver::routed::{build_transport, RoutedModel};
 use silver::run_manager::{ApprovalSetup, RunManager};
@@ -21,7 +20,6 @@ use silver::terminal::TerminalManager;
 use silver::todo_store::TodoStore;
 use silver::web::HttpWebBackend;
 use silver_core::agent::{Agent, AgentConfig};
-use silver_core::memory::MemoryStore;
 use silver_core::model::Model;
 use silver_core::services::DocumentIndex;
 use silver_core::services::ToolServices;
@@ -79,12 +77,17 @@ async fn main() -> anyhow::Result<()> {
     let model = build_fallback_chain(&config, &endpoint, primary);
     let aux_model = build_aux_model(&config, &endpoint);
 
-    let (mcp, tools) = build_tools(&config).await;
+    let ai_memory = silver::ai_memory::AiMemory::start(&config, &data_dir).await;
+    let (mcp, tools) = build_tools(
+        &config,
+        ai_memory
+            .as_ref()
+            .map(silver::ai_memory::AiMemory::mcp_server),
+    )
+    .await;
     let (agent_config, subagent_config) = build_agent_configs(&config, context_length);
     let approval_policy = build_approval_policy(&config);
 
-    let fs_memory = Arc::new(FsMemoryStore::new(PathBuf::clone(&data_dir)));
-    let memory = Arc::clone(&fs_memory) as Arc<dyn MemoryStore>;
     let search: Arc<dyn SessionSearch> = Arc::new(DbSessionSearch::new(Db::clone(&db)));
     let documents: Arc<dyn DocumentIndex> = Arc::new(DbDocumentIndex::new(Db::clone(&db)));
 
@@ -127,7 +130,6 @@ async fn main() -> anyhow::Result<()> {
         skills,
         Arc::clone(&checkpoints),
         subagents,
-        Arc::clone(&memory),
         search,
         documents,
     );
@@ -135,7 +137,6 @@ async fn main() -> anyhow::Result<()> {
     let runs = build_run_manager(
         Db::clone(&db),
         agent,
-        Arc::clone(&memory),
         &config,
         &context_resolver,
         services,
@@ -161,7 +162,9 @@ async fn main() -> anyhow::Result<()> {
         chat,
         runs: Arc::clone(&runs),
         config: Arc::clone(&config),
-        memory: fs_memory,
+        memory_endpoint: ai_memory
+            .as_ref()
+            .map(|server| server.endpoint().to_string()),
         started_at: chrono::Utc::now(),
         checkpoints: Some(checkpoints),
         oauth: Some(oauth),
@@ -177,6 +180,9 @@ async fn main() -> anyhow::Result<()> {
     serve(state, &config, &runs, &data_dir).await?;
 
     mcp.shutdown().await;
+    if let Some(ai_memory) = ai_memory {
+        ai_memory.shutdown().await;
+    }
     silver_core::lsp::shutdown().await;
     tracing::info!("silver stopped");
     Ok(())
@@ -527,12 +533,17 @@ fn build_aux_model(config: &Config, endpoint: &Endpoint) -> Option<Arc<dyn Model
     )
 }
 
-/// Connect MCP servers and assemble the tool registry the agent shares.
-async fn build_tools(config: &Config) -> (Arc<McpManager>, Arc<ToolRegistry>) {
+/// Connect MCP servers and assemble the tool registry the agent shares. `ai_memory` is the
+/// managed shared-memory server, registered alongside the configured ones.
+async fn build_tools(
+    config: &Config,
+    ai_memory: Option<&McpServerConfig>,
+) -> (Arc<McpManager>, Arc<ToolRegistry>) {
     // MCP servers connect before the registry is shared with the agent so their tools are
     // visible to the very first run. The manager retains every connection for shutdown.
     let mcp = Arc::new(McpManager::new());
-    let mcp_tools = mcp.connect_all(config).await;
+    let extra: Vec<McpServerConfig> = ai_memory.into_iter().cloned().collect();
+    let mcp_tools = mcp.connect_all(config, &extra).await;
     let mut registry = ToolRegistry::new();
     silver_core::tools::register_default_tools(&mut registry);
     let registered = McpManager::register_into(&mut registry, mcp_tools);
@@ -576,7 +587,6 @@ fn build_agent_configs(
         turn_liveness_poll_s: config.agent.turn_liveness_poll_seconds,
         empty_guard_enabled: config.agent.empty_guard_enabled,
         empty_cost_threshold_usd: config.agent.empty_cost_threshold_usd,
-        memory_max_prompt_bytes_per_file: config.memory.max_prompt_bytes_per_file as usize,
         summarize_with_main_model: config.agent.summarize_with_main_model,
         guardrails: silver_core::guard::tool_guardrails::ToolCallGuardrailConfig {
             hard_stop_enabled: config.agent.tool_call_hard_stop,
@@ -725,7 +735,6 @@ fn build_services(
     skills: Arc<SkillsStore>,
     checkpoints: Arc<Checkpoints>,
     subagents: Arc<silver::subagents::DaemonSubagents>,
-    memory: Arc<dyn MemoryStore>,
     search: Arc<dyn SessionSearch>,
     documents: Arc<dyn DocumentIndex>,
 ) -> ToolServices {
@@ -740,7 +749,6 @@ fn build_services(
         lsp: silver_core::lsp::manager_if_enabled(),
         subagents: Some(subagents as Arc<dyn silver_core::subagent::Subagents>),
         env_passthrough: Vec::clone(&config.tools.env_passthrough),
-        memory: Some(memory),
         session_search: Some(search),
         documents: Some(documents),
         team: None,
@@ -754,7 +762,6 @@ fn build_services(
 fn build_run_manager(
     db: Db,
     agent: Arc<Agent>,
-    memory: Arc<dyn MemoryStore>,
     config: &Arc<Config>,
     context_resolver: &Arc<silver::context_length::ModelContextResolver>,
     services: ToolServices,
@@ -766,7 +773,6 @@ fn build_run_manager(
     RunManager::new(
         db,
         agent,
-        memory,
         Arc::clone(config),
         Some(Arc::clone(context_resolver)),
         services,

@@ -12,6 +12,7 @@ pub mod daemon;
 pub mod git;
 pub mod health;
 pub mod insights;
+pub mod memory;
 pub mod oauth;
 pub mod presets;
 pub mod provider;
@@ -26,7 +27,6 @@ pub mod workspaces;
 
 use crate::config::Config;
 use crate::db::Db;
-use crate::memory_fs::FsMemoryStore;
 use crate::run_manager::RunManager;
 use axum::{
     extract::Request,
@@ -51,7 +51,9 @@ pub struct AppState {
     pub db: Db,
     pub runs: Arc<RunManager>,
     pub config: Arc<Config>,
-    pub memory: Arc<FsMemoryStore>,
+    /// The managed ai-memory server's base URL, for the Messages memory panel. None when memory
+    /// is off.
+    pub memory_endpoint: Option<String>,
     pub started_at: DateTime<Utc>,
     /// Filesystem checkpoint store, shared with the write tools. None disables the checkpoint
     /// endpoints (and snapshot capture) for embedding tests.
@@ -233,6 +235,11 @@ fn routes() -> Router<AppState> {
             get(workspaces::get_one).delete(workspaces::remove),
         )
         .route("/v1/workspaces/{workspace_id}/files", get(workspaces::file))
+        .route("/v1/workspaces/{workspace_id}/memory", get(memory::view))
+        .route(
+            "/v1/workspaces/{workspace_id}/memory/page",
+            get(memory::page),
+        )
         .route(
             "/v1/workspaces/{workspace_id}/attachments",
             post(workspaces::attach),

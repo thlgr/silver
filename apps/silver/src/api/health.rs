@@ -48,7 +48,6 @@ pub async fn capabilities(
             max_concurrent_runs: state.config.server.max_concurrent_runs,
             run_timeout_seconds: state.config.server.run_timeout_seconds,
             max_message_bytes: state.config.server.max_message_bytes,
-            memory_max_prompt_bytes_per_file: state.config.memory.max_prompt_bytes_per_file,
         },
         features: vec![
             "sse".into(),
@@ -57,7 +56,6 @@ pub async fn capabilities(
             "stop".into(),
             "steer".into(),
             "workspaces".into(),
-            "memory".into(),
             "session_search".into(),
             "documents".into(),
             "image_view".into(),

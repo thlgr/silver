@@ -312,13 +312,26 @@ impl Default for ToolsConfig {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default)]
 pub struct MemoryConfig {
-    pub max_prompt_bytes_per_file: u64,
+    /// Whether silver manages a local ai-memory server for shared, cross-harness memory.
+    pub enabled: bool,
+    /// The ai-memory executable; a bare name is looked up on `PATH`.
+    pub binary: Option<String>,
+    /// Where the managed ai-memory server listens (a loopback address).
+    pub bind: String,
+    /// The ai-memory data directory; defaults under silver's own data directory.
+    pub data_dir: Option<PathBuf>,
+    /// Whether to wire installed external harnesses (Claude Code, OpenCode, …) to the server.
+    pub install_harnesses: bool,
 }
 
 impl Default for MemoryConfig {
     fn default() -> Self {
         Self {
-            max_prompt_bytes_per_file: 65_536,
+            enabled: true,
+            binary: None,
+            bind: "127.0.0.1:49374".to_string(),
+            data_dir: None,
+            install_harnesses: true,
         }
     }
 }

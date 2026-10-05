@@ -88,12 +88,6 @@
       </li>
     {/each}
   </ul>
-{:else if kind === 'memory'}
-  {#if args.action === 'remove'}
-    <pre class="well mono strike">{args.old_text}</pre>
-  {:else}
-    <pre class="well mono">{args.content ?? text}</pre>
-  {/if}
 {:else}
   <pre class="well mono">{JSON.stringify(args, null, 2)}</pre>
   {#if !input && text}<pre class="well mono">{text}</pre>{/if}

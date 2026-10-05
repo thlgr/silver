@@ -150,7 +150,6 @@ pub fn activity(tool: &str, args: &Value) -> String {
         "web_extract" => with("Reading", arg(&["url"])),
         "delegate_task" => "Delegating a task…".into(),
         "ask_bot" => "Asking another bot…".into(),
-        "memory" => "Updating its memory…".into(),
         other => format!("Using {}…", other.replace('_', " ")),
     }
 }

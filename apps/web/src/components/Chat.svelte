@@ -102,7 +102,7 @@
   {#if empty}
     <div class="hero">
       <h1>{workspace?.name ?? 'silver'}</h1>
-      <p class="muted">{workspace?.path ?? 'No workspace. The agent has no project files, only memory and past sessions.'}</p>
+      <p class="muted">{workspace?.path ?? 'No workspace. The agent has no project files, only past sessions.'}</p>
       {#if needsModel}
         <p class="muted">Connect a model to start. <button class="link" onclick={() => (app.settingsTab = 'providers')}>Open Settings</button></p>
       {/if}

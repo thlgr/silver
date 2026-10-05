@@ -1,7 +1,6 @@
 //! System prompt assembly in three tiers, joined stable (identity, guidance) -> context (project,
-//! workspace) -> volatile (skills, memory, timestamp), so a prefix cache reuses the scaffold.
+//! workspace) -> volatile (skills, timestamp), so a prefix cache reuses the scaffold.
 
-use crate::context::gate_context_text;
 use crate::services::SkillSummary;
 use chrono::{DateTime, Utc};
 use std::collections::BTreeMap;
@@ -27,10 +26,6 @@ pub const SESSION_SEARCH_GUIDANCE: &str = "When the user references a past conve
 /// S5. Image and document guidance. Without it a small model reads a screenshot's filename and
 /// answers from imagination, or greps a PDF's bytes instead of extracting them.
 pub const MEDIA_GUIDANCE: &str = "You can see a picture and search a document. Use view_image with a path and a question when the answer is in an image (a screenshot, a diagram, a photo); it is the only way to look at one. Use search_documents for a document you were not given the text of: pass its path to index it, or search what is already indexed. read_file extracts a PDF's text, so a document can be read directly when you know the page. A file the user attached is already in the workspace: open the path in the prompt, do not ask where it is.";
-
-/// S5. Memory guidance. A 4B model reads hedged advice about what does not belong in memory
-/// as "don't save", and often says it will remember without calling the tool.
-pub const MEMORY_GUIDANCE: &str = "You have persistent memory: its entries load into every future session. Save with the memory tool before you reply whenever the user asks you to remember something, tells you about themselves (name, language, preferences, corrections to how you work), or states a lasting fact about this project (how to run it, conventions). Saying you will remember is not saving. When a saved fact changes, replace it; when the user asks you to forget it, remove it. Don't save details of the current task. Write short facts, not orders: 'User prefers <language>', not 'Always answer in <language>'.";
 
 /// Sudo guard when the daemon runs without elevated privileges.
 pub const NON_ROOT_SUDO_TIP: &str = "You have no sudo, but the user does. Never install anything (pacman, apt, dnf, gem, pip or similar), not even to try, and no workarounds such as downloading binaries. If something is missing, stop and give the user the exact commands to run themselves, with sudo where needed, for this OS:";
@@ -137,17 +132,6 @@ pub const EXECUTION_GUIDANCE_MODELS: &[&str] = &[
 /// First line of the runtime environment block.
 pub const RUNTIME_ENVIRONMENT_HEADING: &str = "# Runtime environment";
 
-/// Header of the built-in memory snapshot.
-pub const MEMORY_BLOCK_HEADER: &str = "MEMORY (your personal notes)";
-/// Header of the user-profile snapshot.
-pub const USER_BLOCK_HEADER: &str = "USER PROFILE (who the user is)";
-/// Character budget reported for the memory snapshot.
-pub const MEMORY_CHAR_LIMIT: usize = 2_200;
-/// Character budget reported for the user-profile snapshot.
-pub const USER_CHAR_LIMIT: usize = 1_375;
-/// Separator drawn above and below each memory snapshot header.
-const MEMORY_SEPARATOR: char = '\u{2550}';
-
 /// Gate for a model-conditioned guidance block.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Gate {
@@ -172,10 +156,6 @@ pub struct PromptInputs<'a> {
     pub skills_index: Option<&'a str>,
     /// Pre-rendered subagent catalogue, or None when delegation is off.
     pub agents_index: Option<&'a str>,
-    /// Raw MEMORY.md snapshot content.
-    pub memory: &'a str,
-    /// Raw USER.md snapshot content.
-    pub user: &'a str,
     /// Project context files, already labelled and capped by the caller.
     pub project_context: String,
     /// Ambient application-provided context (the AG-UI `context` and `forwardedProps`),
@@ -352,12 +332,12 @@ pub fn build_system_prompt_parts(input: &PromptInputs) -> PromptTiers {
         context.push(workspace_snapshot(input));
     }
 
-    let mut volatile: Vec<Option<String>> = Vec::new();
-    volatile.push(skills_index(input));
-    volatile.push(agents_index(input));
-    volatile.extend(memory_blocks(input).into_iter().map(Some));
-    volatile.push(Some(timestamp_line(input)));
-    volatile.push(runtime_environment(input));
+    let volatile: Vec<Option<String>> = vec![
+        skills_index(input),
+        agents_index(input),
+        Some(timestamp_line(input)),
+        runtime_environment(input),
+    ];
 
     PromptTiers {
         stable: join_tier(&stable),
@@ -413,9 +393,6 @@ fn parallel_tool_calls(has_tools: bool) -> Option<String> {
 fn tool_guidance_block(input: &PromptInputs) -> Option<String> {
     let has = |name: &str| input.tool_names.contains(&name);
     let mut parts: Vec<String> = Vec::new();
-    if has("memory") {
-        parts.push(MEMORY_GUIDANCE.to_string());
-    }
     if has("session_search") {
         parts.push(SESSION_SEARCH_GUIDANCE.to_string());
     }
@@ -591,44 +568,6 @@ fn agents_index(input: &PromptInputs) -> Option<String> {
     Some(index.to_string())
 }
 
-fn memory_blocks(input: &PromptInputs) -> Vec<String> {
-    if !input.tool_names.contains(&"memory") {
-        return Vec::new();
-    }
-    let mut parts = Vec::new();
-    if let Some(block) = memory_block(MEMORY_BLOCK_HEADER, input.memory, MEMORY_CHAR_LIMIT) {
-        parts.push(block);
-    }
-    if let Some(block) = memory_block(USER_BLOCK_HEADER, input.user, USER_CHAR_LIMIT) {
-        parts.push(block);
-    }
-    parts
-}
-
-fn memory_block(header: &str, content: &str, limit: usize) -> Option<String> {
-    let content = content.trim();
-    if content.is_empty() {
-        return None;
-    }
-    // Memory is untrusted context: a file that looks like an injection or exfiltration
-    // payload is replaced by a visible fail-closed marker instead of entering the prompt.
-    let content = match gate_context_text(content, header) {
-        Ok(clean) => clean,
-        Err(marker) => marker,
-    };
-    let current = content.chars().count();
-    let pct = (current * 100)
-        .checked_div(limit)
-        .map(|value| value.min(100))
-        .unwrap_or(0);
-    let separator = MEMORY_SEPARATOR.to_string().repeat(46);
-    Some(format!(
-        "{separator}\n{header} [{pct}%:  {}/{} chars]\n{separator}\n{content}",
-        with_commas(current),
-        with_commas(limit)
-    ))
-}
-
 fn timestamp_line(input: &PromptInputs) -> String {
     let date = input.started_at.format("%A, %B %d, %Y");
     let mut line = format!("Conversation started: {date}");
@@ -670,17 +609,4 @@ fn runtime_environment(input: &PromptInputs) -> Option<String> {
         "{RUNTIME_ENVIRONMENT_HEADING}\n\n{}",
         lines.join("\n")
     ))
-}
-
-fn with_commas(value: usize) -> String {
-    let digits = value.to_string();
-    let bytes = digits.as_bytes();
-    let mut out = String::with_capacity(digits.len() + digits.len() / 3);
-    for (index, byte) in bytes.iter().enumerate() {
-        if index > 0 && (bytes.len() - index).is_multiple_of(3) {
-            out.push(',');
-        }
-        out.push(*byte as char);
-    }
-    out
 }

@@ -1,8 +1,7 @@
-//! Run context and prompt assembly. Workspace content and memory are untrusted context:
-//! they can never change daemon security policy.
+//! Run context and prompt assembly. Workspace content is untrusted context: it can never
+//! change daemon security policy.
 
 use crate::error::{CoreError, CoreResult};
-use crate::memory::{MemoryRender, MemorySnapshot};
 use crate::session::Session;
 use crate::workspace::{lexical_normalize, Workspace};
 use silver_protocol::{RunId, Scope};
@@ -129,7 +128,7 @@ const DEFENSIVE_PHRASES: [&str; 24] = [
     "should not send",
 ];
 
-/// Scan untrusted context or memory text for injection and exfiltration instructions. Lines that
+/// Scan untrusted context text for injection and exfiltration instructions. Lines that
 /// phrase them defensively ("never send API keys to a URL") pass; invisible unicode never does.
 pub fn scan_context_content(content: &str) -> Vec<InjectionFinding> {
     let mut findings = Vec::new();
@@ -421,7 +420,6 @@ pub struct RunContext {
     pub workspace: Option<Workspace>,
     pub session: Session,
     pub model: String,
-    pub memory: MemorySnapshot,
     pub project_instructions: Vec<ProjectInstruction>,
     /// Base identity and security policy supplied by the daemon.
     pub base_system_prompt: String,
@@ -1121,31 +1119,19 @@ fn git_bounded(root: &Path, args: &[&str]) -> Option<String> {
 }
 
 /// Assemble the system prompt, gating tool-aware guidance on the tools this run can call.
-pub fn build_system_prompt(
-    ctx: &RunContext,
-    tool_names: &[&str],
-    memory_max_bytes_per_file: usize,
-) -> (String, MemoryRender) {
-    build_system_prompt_with_budget(ctx, tool_names, memory_max_bytes_per_file, None)
-}
-
-/// Budget-aware variant of build_system_prompt; the context budget scales the dynamic
-/// project-instruction byte cap when the caller knows the model's window.
+/// The context budget scales the dynamic project-instruction byte cap when the caller knows
+/// the model's window.
 pub fn build_system_prompt_with_budget(
     ctx: &RunContext,
     tool_names: &[&str],
-    memory_max_bytes_per_file: usize,
     context_budget: Option<usize>,
-) -> (String, MemoryRender) {
-    let render = ctx.memory.render(memory_max_bytes_per_file);
+) -> String {
     let inputs = crate::prompt::PromptInputs {
         identity: &ctx.base_system_prompt,
         tool_names,
         has_skill_manage: tool_names.contains(&"skill_manage"),
         skills_index: ctx.skills_index.as_deref(),
         agents_index: ctx.agents_index.as_deref(),
-        memory: &ctx.memory.memory,
-        user: &ctx.memory.user,
         project_context: ctx.instructions_block_with_budget(context_budget),
         external_context: ctx.external_context.as_deref(),
         model: &ctx.model,
@@ -1158,7 +1144,7 @@ pub fn build_system_prompt_with_budget(
         workspace: ctx.workspace_snapshot(),
         started_at: ctx.session_started,
     };
-    (crate::prompt::build_system_prompt(&inputs), render)
+    crate::prompt::build_system_prompt(&inputs)
 }
 
 /// True when the daemon runs with elevated privileges. On Unix this is euid 0;

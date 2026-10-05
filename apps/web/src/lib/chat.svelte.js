@@ -13,6 +13,7 @@ export const chat = $state({
   loaded: false,
   selected: null, // the open bot's id
   thread: null, // the open thread's root entry id, in the selected chat
+  memory: false, // the workspace memory panel is open beside the conversation
   lanes: {}, // lane key -> { entries, complete }, for every chat or thread that was opened
   files: {}, // lane key -> attached files, stored in the bot's folder, going out with the next message
   query: '', // the roster search

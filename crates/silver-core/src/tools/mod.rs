@@ -7,7 +7,6 @@ pub mod documents;
 pub mod execute_code;
 pub mod fs;
 pub mod lsp;
-pub mod memory;
 pub mod patch;
 pub mod process;
 pub mod replace;
@@ -31,7 +30,6 @@ pub fn register_default_tools(registry: &mut ToolRegistry) {
     execute_code::register(registry);
     bash::register(registry);
     process::register(registry);
-    memory::register(registry);
     session_search::register(registry);
     documents::register(registry);
     todo::register(registry);

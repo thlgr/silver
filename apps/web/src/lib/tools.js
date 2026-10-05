@@ -6,7 +6,7 @@ const READ_ONLY_EXPLORE = new Set(['read_file', 'list_files', 'search_files'])
 
 const KNOWN_TOOLS = new Set([
   'read_file', 'list_files', 'search_files', 'patch', 'write_file',
-  'bash', 'run_command', 'execute_code', 'todo_list', 'memory',
+  'bash', 'run_command', 'execute_code', 'todo_list',
   'web_search', 'web_extract', 'session_search', 'skill_view', 'skills_list', 'skill_manage', 'lsp',
   'ask_user_question', 'exit_plan_mode', 'delegate_task',
 ])
@@ -243,16 +243,6 @@ export function describe(step, root) {
         : ['Read todos', 'Reading todos', 'Read todos']
       return { verb: verbFor(forms, status), target: '', meta: todoMeta(step), body: 'todos', open: hasTodos, icon: 'list-checks' }
     }
-    case 'memory': {
-      const action = args.action ?? 'read'
-      const forms = {
-        add: ['Save', 'Saving', 'Saved'],
-        replace: ['Update', 'Updating', 'Updated'],
-        remove: ['Remove', 'Removing', 'Removed'],
-      }[action] ?? ['Read', 'Reading', 'Read']
-      const target = args.target === 'user' ? 'USER.md' : 'MEMORY.md'
-      return { verb: verbFor(forms, status), target, meta: '', body: 'memory', open: action !== 'read', icon: 'brain' }
-    }
     case 'web_search':
       return { verb: verbFor(['Search the web', 'Searching the web', 'Searched the web'], status), target: args.query ? `"${args.query}"` : '', meta: '', body: 'output', open: false, icon: 'globe' }
     case 'web_extract': {
@@ -315,7 +305,6 @@ export function phrase(steps) {
   const ran = tools.filter((s) => ['bash', 'run_command', 'execute_code'].includes(s.name)).length
   if (ran) parts.push(`ran ${ran} command${ran === 1 ? '' : 's'}`)
   if (byName('todo_list').length) parts.push('updated todos')
-  if (byName('memory').length) parts.push('updated memory')
   if (byName('web_search').length) parts.push('searched the web')
   const fetched = byName('web_extract').length
   if (fetched) parts.push(`fetched ${fetched} page${fetched === 1 ? '' : 's'}`)

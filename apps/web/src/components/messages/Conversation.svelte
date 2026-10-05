@@ -13,11 +13,12 @@
   import Intro from './Intro.svelte'
   import WorkingIndicator from './WorkingIndicator.svelte'
   import IconBack from '~icons/lucide/chevron-left'
+  import IconBrain from '~icons/lucide/brain'
   import IconDetails from '~icons/lucide/chevrons-left'
   import IconList from '~icons/lucide/list'
   import IconFolder from '~icons/lucide/folder'
 
-  let { botId, details, ontoggle, onback } = $props()
+  let { botId, details, ontoggle, onmemory, onback } = $props()
   const bot = $derived(botById(botId))
   const found = $derived(chat.lanes[laneKey(botId)])
   const entries = $derived(found?.entries ?? [])
@@ -74,6 +75,7 @@
         {#if workspace}<small><IconFolder />{workspace}</small>{/if}
       </button>
       <span class="side end">
+        {#if bot.workspace_id}<button type="button" class="round glass press" title="Workspace memory" aria-label="Workspace memory" onclick={onmemory}><IconBrain /></button>{/if}
         <button type="button" class="round glass press" title="Full conversation" aria-label="Full conversation" onclick={() => openTrace(botId)}><IconList /></button>
         {#if !details}<button type="button" class="round glass press" title="Conversation details" aria-label="Conversation details" onclick={ontoggle}><IconDetails /></button>{/if}
       </span>
