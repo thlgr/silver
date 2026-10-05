@@ -3,6 +3,7 @@
 //! messages, final replies, approval cards and notices.
 
 mod group;
+mod limits;
 mod permission;
 mod store;
 mod team;
@@ -17,13 +18,13 @@ use crate::run_manager::RunManager;
 use silver_core::error::{CoreError, CoreResult};
 use silver_protocol::chat::{
     AnswerRequest, BotKind, BotStatus, BotView, ChatEntry, ChatEvent, CreateBotRequest, EntryKind,
-    SendMessageRequest, UpdateBotRequest,
+    LimitWindow, SendMessageRequest, UpdateBotRequest,
 };
 use silver_protocol::{ApprovalDecisionRequest, RunId};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
 use store::{now_ms, BotStats};
-use tokio::sync::broadcast;
+use tokio::sync::{broadcast, Notify};
 
 /// The `sessions.source` of every session a bot runs in.
 pub const SESSION_SOURCE: &str = "chat";
@@ -69,6 +70,10 @@ struct State {
     asks: team::Asks,
     /// An external agent's requests the user has not answered yet, by their card's entry.
     permissions: HashMap<String, permission::Waiting>,
+    /// The usage limits last read for each provider, shared by every bot that answers with it.
+    limits: HashMap<String, Vec<LimitWindow>>,
+    /// Why each provider's limits could not be read last time, so a repeat is not logged again.
+    limit_errors: HashMap<String, String>,
 }
 
 pub struct ChatHub {
@@ -76,6 +81,8 @@ pub struct ChatHub {
     runs: OnceLock<Arc<RunManager>>,
     events: broadcast::Sender<ChatEvent>,
     state: Mutex<State>,
+    /// Wakes the usage-limit watch before its next round.
+    recheck: Notify,
 }
 
 fn invalid(message: impl Into<String>) -> CoreError {
@@ -160,6 +167,7 @@ impl ChatHub {
             runs: OnceLock::new(),
             events,
             state: Mutex::new(State::default()),
+            recheck: Notify::new(),
         })
     }
 
@@ -288,6 +296,7 @@ impl ChatHub {
             created_at: now_ms(),
         };
         let row = self.db.save_chat_bot(row).await?;
+        self.recheck.notify_one();
         self.publish_bot(&row.id).await;
         self.bot_view(&row.id).await
     }
@@ -360,6 +369,7 @@ impl ChatHub {
             }
         }
         self.db.save_chat_bot(row).await?;
+        self.recheck.notify_one();
         self.publish_bot(id).await;
         self.bot_view(id).await
     }
@@ -686,6 +696,7 @@ fn new_entry(chat: &str, thread: Option<&str>, kind: EntryKind) -> ChatEntry {
         reactions: Vec::new(),
         thread: None,
         permission: None,
+        limits: Vec::new(),
         created_at: now_ms(),
     }
 }

@@ -14,6 +14,8 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 18080
+# What the OpenCode Go usage endpoint reports; POST /set-usage/<percent> changes it.
+USAGE = {"percent": 10}
 
 
 def event(obj):
@@ -34,15 +36,20 @@ class Handler(BaseHTTPRequestHandler):
         except Exception:
             return {}
 
+    def _json(self, obj):
+        body = json.dumps(obj).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
     def do_GET(self):
         if self.path.endswith("/models"):
-            body = json.dumps({"object": "list", "data": [{"id": "mock-model", "object": "model"}]}).encode()
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Content-Length", str(len(body)))
-            self.end_headers()
-            self.wfile.write(body)
-            return
+            return self._json({"object": "list", "data": [{"id": "mock-model", "object": "model"}]})
+        if self.path.endswith("/zen/go/v1/usage"):
+            window = lambda percent: {"status": "ok", "percent": percent, "resetsAt": "2099-01-01T00:00:00.000Z"}
+            return self._json({"usage": {"rolling": window(USAGE["percent"]), "weekly": window(39), "monthly": window(19)}})
         self.send_response(404)
         self.end_headers()
 
@@ -55,6 +62,9 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def do_POST(self):
+        if self.path.startswith("/set-usage/"):
+            USAGE["percent"] = int(self.path.rsplit("/", 1)[1])
+            return self._json(USAGE)
         if not self.path.endswith("/chat/completions"):
             self.send_response(404)
             self.end_headers()

@@ -9,6 +9,7 @@
   import { hexOf } from '../../lib/avatar.js'
   import { time } from '../../lib/when.js'
   import Avatar from './Avatar.svelte'
+  import LimitBar from './LimitBar.svelte'
   import Menu from './Menu.svelte'
   import PermissionCard from './PermissionCard.svelte'
   import Reactions from './Reactions.svelte'
@@ -107,11 +108,15 @@
       <span class="author">
         {#if author}<Avatar shape={author.avatar_shape} color={author.avatar_color} size={26} />{/if}
         <span class="who" style:color={author ? hexOf(author.avatar_color) : undefined}>{author?.name ?? 'A bot that left'}</span>
+        {#if entry.limits?.length}<LimitBar windows={entry.limits} />{/if}
       </span>
     {/if}
     <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
     <div class="bubble agent prose" class:live={!entry.final} oncontextmenu={open} onpointerdown={press} onpointerup={release} onpointercancel={release} onpointermove={release} onclick={copyCode}>{@html markdown(entry.text)}</div>
-    <div class="foot"><span class="time">{stamp}</span>{@render actions()}</div>
+    <div class="foot">
+      {#if entry.limits?.length && !(group && start)}<LimitBar windows={entry.limits} up />{/if}
+      <span class="time">{stamp}</span>{@render actions()}
+    </div>
     <div class="under" class:indent={group}>
       <Reactions {entry} />
       {#if entry.thread && !inThread}<ThreadChip summary={entry.thread} onopen={() => onthread(entry)} />{/if}
