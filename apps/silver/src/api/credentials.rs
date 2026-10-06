@@ -316,12 +316,14 @@ async fn unlisted_local_model(state: &AppState, route: &crate::routed::Route) ->
 }
 
 /// Per-model supported reasoning-effort sets from the models.dev registry, for `ids` plus the
-/// default; a model the registry does not know falls back to the global accepted set.
+/// default; a model the registry does not know falls back to the global accepted set. An agent's
+/// own `levels` stand for every model it offers.
 fn model_efforts(
     registry: Option<&Value>,
     provider: &str,
     ids: &[String],
     default: &str,
+    levels: Option<&[String]>,
 ) -> serde_json::Map<String, Value> {
     let mut out = serde_json::Map::new();
     let mut seen: Vec<String> = Vec::new();
@@ -330,11 +332,14 @@ fn model_efforts(
             seen.push(id.to_string());
             out.insert(
                 id.to_string(),
-                json!(crate::context_length::supported_reasoning_efforts(
-                    registry,
-                    Some(provider),
-                    id
-                )),
+                match levels {
+                    Some(levels) => json!(levels),
+                    None => json!(crate::context_length::supported_reasoning_efforts(
+                        registry,
+                        Some(provider),
+                        id
+                    )),
+                },
             );
         }
     };
@@ -371,7 +376,7 @@ pub async fn models(
     if provider.is_empty() {
         let registry = registry(&state).await;
         let default = state.config.resolved_model();
-        let efforts = model_efforts(registry.as_deref(), "", &[], default);
+        let efforts = model_efforts(registry.as_deref(), "", &[], default, None);
         return Ok(Json(json!({
             "provider": "",
             "default": default,
@@ -383,17 +388,18 @@ pub async fn models(
     }
     let route = routes.resolve(&provider).await?;
     let authenticated = route.authenticated();
-    let models = match route.kind {
-        _ if !authenticated => Vec::new(),
+    let (models, agent_efforts) = match route.kind {
+        _ if !authenticated => (Vec::new(), None),
         // Listing starts the agent, which the page load, naming no provider, does not wait for.
-        ProviderKind::Acp if !named => Vec::new(),
-        ProviderKind::Acp => crate::acp::list_models(&route.base_url)
-            .await
-            .unwrap_or_else(|error| {
-                tracing::debug!(provider, %error, "could not list the agent's models");
-                Vec::new()
-            }),
-        _ => catalog_models(&state, &route).await,
+        ProviderKind::Acp if !named => (Vec::new(), None),
+        ProviderKind::Acp => match crate::acp::list_offered(&route.base_url).await {
+            Ok(offered) => (offered.models, Some(offered.efforts)),
+            Err(error) => {
+                tracing::debug!(provider, %error, "could not list what the agent offers");
+                (Vec::new(), None)
+            }
+        },
+        _ => (catalog_models(&state, &route).await, None),
     };
     let details = local_details(&state, &route).await;
     // The model a run will name, as create_run resolves it: a local server's placeholder
@@ -401,7 +407,13 @@ pub async fn models(
     let default =
         crate::context_length::model_served_for(&details, &route.model).unwrap_or(route.model);
     let registry = registry(&state).await;
-    let efforts = model_efforts(registry.as_deref(), &provider, &models, &default);
+    let efforts = model_efforts(
+        registry.as_deref(),
+        &provider,
+        &models,
+        &default,
+        agent_efforts.as_deref(),
+    );
     Ok(Json(json!({
         "provider": provider,
         "default": default,

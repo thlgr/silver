@@ -1465,6 +1465,11 @@ impl RunManager {
     ) -> Arc<Agent> {
         let run_effort = if let Some(effort) = run_effort {
             let supported = match &self.context_resolver {
+                // An external agent lists its own levels and keeps its own when it lacks one.
+                _ if !native_loop(provider) => crate::config::REASONING_EFFORT_LADDER
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect(),
                 Some(resolver) => crate::context_length::supported_reasoning_efforts(
                     resolver.registry().await.as_deref(),
                     Some(provider),

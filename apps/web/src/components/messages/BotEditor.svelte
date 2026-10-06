@@ -149,7 +149,7 @@
     {/if}
     <Choice label="Agent" value={draft.provider} options={providers} onchange={(id) => ((draft.provider = id), (draft.model = ''))} />
     <Combo label="Model" bind:value={draft.model} suggestions={models} placeholder={catalog?.default && !external ? `Default (${catalog.default})` : 'Default'} />
-    {#if !external}
+    {#if !external || supported?.length}
       <Choice label="Effort" value={draft.reasoning_effort ?? ''} options={efforts} onchange={(id) => (draft.reasoning_effort = id || null)} />
     {/if}
     <Choice label="Permissions" value={draft.yolo ? 'auto' : 'ask'} options={PERMISSIONS} onchange={(id) => (draft.yolo = id === 'auto')} />

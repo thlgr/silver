@@ -71,8 +71,10 @@ calls never reach silver's approval gate, and only its prose comes back (its thi
 activity show as reasoning). One ACP session is kept per silver session, so after the first turn
 only the newest message is sent. A model other than the agent's own name is selected through the
 agent's `model` option, and a session keeps the model it started with, so changing it starts a new
-session. The agents list their models themselves: silver starts one to ask (a few seconds, then
-remembered until restart) when the editor or picker opens its list.
+session. The agents list their models and effort levels themselves: silver starts one to ask (a
+few seconds, then remembered until restart) when the editor or picker opens its list. The effort
+is the agent's `effort` option, set on the running session when it changes; an agent with no such
+option offers none, and one that refuses a level for the model keeps its own.
 
 All transports share one TLS policy (`[security]`), redact the key from error bodies and truncate
 them, and never echo a 401/403 body.

@@ -386,8 +386,15 @@ pub struct AcpProvider {
     cwd: Option<String>,
     model: String,
     connection: Mutex<Option<Arc<Connection>>>,
-    /// Each conversation's ACP session and the model it was opened with.
-    sessions: Mutex<HashMap<String, (String, String)>>,
+    sessions: Mutex<HashMap<String, Opened>>,
+}
+
+/// A conversation's ACP session, the model it was opened with and the effort it runs at (empty:
+/// the agent's own).
+struct Opened {
+    id: String,
+    model: String,
+    effort: String,
 }
 
 /// The value for the agent's `model` config option. The agent mode's own name (`claude`,
@@ -488,22 +495,31 @@ impl AcpProvider {
 
     /// The ACP session for a conversation and whether this call opened it: a fresh session needs
     /// the whole conversation, an existing one only the newest turn. A session keeps the model it
-    /// started with, so another model opens a new one.
+    /// started with, so another model opens a new one; another effort is set on the same one.
     async fn session(
         &self,
         connection: &Arc<Connection>,
         key: &str,
         model: &str,
+        effort: &str,
         workspace: Option<&std::path::Path>,
     ) -> Result<(String, bool), CoreError> {
-        if let Some((session, _)) = self
+        let reused = self
             .sessions
             .lock()
             .await
-            .get(key)
-            .filter(|(_, opened_with)| opened_with == model)
-        {
-            return Ok((String::clone(session), false));
+            .get_mut(key)
+            .filter(|opened| opened.model == model)
+            .map(|opened| {
+                let changed = opened.effort != effort;
+                opened.effort = effort.to_string();
+                (String::clone(&opened.id), changed)
+            });
+        if let Some((session_id, changed)) = reused {
+            if changed {
+                set_effort(connection, &session_id, effort).await;
+            }
+            return Ok((session_id, false));
         }
         let response = self.new_session(connection, workspace).await?;
         let session_id = response
@@ -526,9 +542,16 @@ impl AcpProvider {
                     ))
                 })?;
         }
+        if !effort.is_empty() {
+            set_effort(connection, &session_id, effort).await;
+        }
         self.sessions.lock().await.insert(
             key.to_string(),
-            (String::clone(&session_id), model.to_string()),
+            Opened {
+                id: String::clone(&session_id),
+                model: model.to_string(),
+                effort: effort.to_string(),
+            },
         );
         Ok((session_id, true))
     }
@@ -558,24 +581,46 @@ impl AcpProvider {
     }
 }
 
-/// How long an agent gets to start and open a session when asked for its models.
+/// Put a session's `effort` option at `effort`, or back at the agent's own level when empty. An
+/// agent with no such level keeps the one it has: that is no reason to fail the turn.
+async fn set_effort(connection: &Connection, session: &str, effort: &str) {
+    let value = if effort.is_empty() { "default" } else { effort };
+    if let Err(error) = connection
+        .request(
+            "session/set_config_option",
+            json!({ "sessionId": session, "configId": "effort", "value": value }),
+        )
+        .await
+    {
+        tracing::warn!(%error, effort = value, "the ACP agent kept its own effort");
+    }
+}
+
+/// How long an agent gets to start and open a session when asked what it offers.
 const LIST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
+
+/// What an agent offers for a session: its models and the effort levels it takes.
+#[derive(Clone, Default)]
+pub struct Offered {
+    pub models: Vec<String>,
+    pub efforts: Vec<String>,
+}
 
 /// What each agent command offered the last time it was asked, so the editor does not start the
 /// agent on every open.
-static OFFERED: std::sync::LazyLock<std::sync::Mutex<HashMap<String, Vec<String>>>> =
+static OFFERED: std::sync::LazyLock<std::sync::Mutex<HashMap<String, Offered>>> =
     std::sync::LazyLock::new(Default::default);
 
-/// The models an agent offers, read from the `model` option of a session it opens (about two
-/// seconds). Only an answer with models is kept.
-pub async fn list_models(command: &str) -> Result<Vec<String>, CoreError> {
+/// What an agent offers, read from the `model` and `effort` options of a session it opens (about
+/// two seconds). Only an answer with models is kept.
+pub async fn list_offered(command: &str) -> Result<Offered, CoreError> {
     let kept = OFFERED
         .lock()
         .unwrap_or_else(PoisonError::into_inner)
         .get(command)
         .cloned();
-    if let Some(models) = kept {
-        return Ok(models);
+    if let Some(offered) = kept {
+        return Ok(offered);
     }
     let agent = AcpProvider::new(command, "");
     let asked = tokio::time::timeout(LIST_TIMEOUT, async {
@@ -587,26 +632,33 @@ pub async fn list_models(command: &str) -> Result<Vec<String>, CoreError> {
     if let Some(connection) = agent.connection.lock().await.take() {
         *connection.writer.lock().await = Box::new(tokio::io::sink());
     }
-    let models = offered_models(&asked.map_err(|_elapsed| {
+    let answer = asked.map_err(|_elapsed| {
         CoreError::ProviderUnavailable("the ACP agent did not answer in time".to_string())
-    })??);
-    if !models.is_empty() {
+    })??;
+    let mut efforts = offered_values(&answer, "effort");
+    // The agent's own `default` is the editor's "Default", not a level.
+    efforts.retain(|level| crate::config::is_valid_reasoning_effort(level));
+    let offered = Offered {
+        models: offered_values(&answer, "model"),
+        efforts,
+    };
+    if !offered.models.is_empty() {
         OFFERED
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
-            .insert(command.to_string(), Vec::clone(&models));
+            .insert(command.to_string(), Offered::clone(&offered));
     }
-    Ok(models)
+    Ok(offered)
 }
 
-/// The values of the `model` option in a `session/new` answer.
-fn offered_models(response: &Value) -> Vec<String> {
+/// The values of the config option `id` in a `session/new` answer.
+fn offered_values(response: &Value, id: &str) -> Vec<String> {
     response
         .get("configOptions")
         .and_then(Value::as_array)
         .into_iter()
         .flatten()
-        .find(|option| option.get("id").and_then(Value::as_str) == Some("model"))
+        .find(|option| option.get("id").and_then(Value::as_str) == Some(id))
         .and_then(|option| option.get("options").and_then(Value::as_array))
         .into_iter()
         .flatten()
@@ -682,8 +734,15 @@ impl Model for AcpProvider {
         } else {
             &request.model
         };
+        let effort = request.reasoning_effort.as_deref().unwrap_or_default();
         let (session_id, fresh) = self
-            .session(&connection, &key, model, request.workspace.as_deref())
+            .session(
+                &connection,
+                &key,
+                model,
+                effort,
+                request.workspace.as_deref(),
+            )
             .await?;
         let text = prompt_text(&request, fresh);
 
@@ -1000,7 +1059,7 @@ mod tests {
     }
 
     #[test]
-    fn the_models_an_agent_offers_come_from_its_model_option() {
+    fn what_an_agent_offers_comes_from_its_model_and_effort_options() {
         let answer = json!({
             "sessionId": "s",
             "configOptions": [
@@ -1009,10 +1068,15 @@ mod tests {
                     { "value": "opus", "name": "Opus" },
                     { "value": "deepseek/flash", "name": "Flash" },
                 ] },
+                { "id": "effort", "options": [
+                    { "value": "default", "name": "Default" },
+                    { "value": "high", "name": "High" },
+                ] },
             ],
         });
-        assert_eq!(offered_models(&answer), ["opus", "deepseek/flash"]);
-        assert!(offered_models(&json!({ "sessionId": "s" })).is_empty());
+        assert_eq!(offered_values(&answer, "model"), ["opus", "deepseek/flash"]);
+        assert_eq!(offered_values(&answer, "effort"), ["default", "high"]);
+        assert!(offered_values(&json!({ "sessionId": "s" }), "model").is_empty());
     }
 
     #[test]
@@ -1032,6 +1096,59 @@ mod tests {
                 preset.id
             );
         }
+    }
+
+    #[tokio::test]
+    async fn the_effort_follows_the_picker_on_the_same_session() {
+        let (mut agent_out, client_in) = tokio::io::duplex(4096);
+        let (client_out, agent_in) = tokio::io::duplex(4096);
+        let connection = Connection::new(client_in, client_out, None);
+        let options = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+        let seen = Arc::clone(&options);
+        tokio::spawn(async move {
+            let mut lines = BufReader::new(agent_in).lines();
+            let mut opened = 0;
+            while let Ok(Some(line)) = lines.next_line().await {
+                let request: Value = serde_json::from_str(&line).unwrap();
+                let params = &request["params"];
+                let result = if request["method"] == "session/new" {
+                    opened += 1;
+                    json!({ "sessionId": format!("s{opened}") })
+                } else {
+                    let (session, id, value) =
+                        (&params["sessionId"], &params["configId"], &params["value"]);
+                    seen.lock().unwrap().push(format!("{session} {id}={value}"));
+                    json!({})
+                };
+                let reply = json!({ "jsonrpc": "2.0", "id": request["id"], "result": result });
+                agent_out
+                    .write_all(format!("{reply}\n").as_bytes())
+                    .await
+                    .unwrap();
+            }
+        });
+
+        let agent = AcpProvider::new("agent", "");
+        let ask = |model, effort| agent.session(&connection, "chat", model, effort, None);
+        let session = |id: &str, fresh| (id.to_string(), fresh);
+        // An agent asked for nothing is told nothing.
+        assert_eq!(ask("claude", "").await.unwrap(), session("s1", true));
+        assert!(options.lock().unwrap().is_empty());
+        // The same session takes another effort once, and the agent's own when it is cleared.
+        assert_eq!(ask("claude", "high").await.unwrap(), session("s1", false));
+        assert_eq!(ask("claude", "high").await.unwrap(), session("s1", false));
+        assert_eq!(ask("claude", "").await.unwrap(), session("s1", false));
+        // Another model opens a session of its own, which starts at the effort asked for.
+        assert_eq!(ask("opus", "max").await.unwrap(), session("s2", true));
+        assert_eq!(
+            *options.lock().unwrap(),
+            [
+                r#""s1" "effort"="high""#,
+                r#""s1" "effort"="default""#,
+                r#""s2" "model"="opus""#,
+                r#""s2" "effort"="max""#,
+            ]
+        );
     }
 
     #[tokio::test]
