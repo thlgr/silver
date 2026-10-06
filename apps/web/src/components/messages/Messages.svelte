@@ -145,7 +145,7 @@
 
   {#if chat.editor}
     {#if 'group' in chat.editor}
-      <GroupEditor group={chat.editor.group} onclose={() => (chat.editor = null)} />
+      <GroupEditor group={chat.editor.group} workspace={chat.editor.workspace} onclose={() => (chat.editor = null)} />
     {:else}
       <BotEditor bot={chat.editor.bot} workspace={chat.editor.workspace} onclose={() => (chat.editor = null)} />
     {/if}

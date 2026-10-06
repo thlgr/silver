@@ -37,11 +37,25 @@
     const searching = chat.query.trim() !== ''
     const inWorkspace = (id) => all.filter((bot) => bot.workspace_id === id)
     return [
-      ...app.workspaces.map((w) => ({ key: w.id, name: w.name, path: w.path, icon: IconFolder, add: `New bot in ${w.name}`, editor: { bot: null, workspace: w.id }, bots: inWorkspace(w.id) })),
-      { key: 'none', name: 'No workspace', icon: IconFolderX, add: 'New bot without a workspace', editor: { bot: null, workspace: '' }, bots: all.filter((bot) => !app.workspaces.some((w) => w.id === bot.workspace_id)) },
+      ...app.workspaces.map((w) => ({ key: w.id, name: w.name, path: w.path, icon: IconFolder, add: `New in ${w.name}`, bots: inWorkspace(w.id) })),
+      { key: 'none', name: 'No workspace', icon: IconFolderX, add: 'New without a workspace', bots: all.filter((bot) => !app.workspaces.some((w) => w.id === bot.workspace_id)) },
     ].filter((section) => section.bots.length || (section.path && !searching))
   })
   const rows = $derived(sections.flatMap((section) => section.bots))
+
+  // The "+" on a workspace offers what can be made in it: a bot, or a group filed under it.
+  function sectionAdd(event, section) {
+    const workspace = section.path ? section.key : ''
+    menu = {
+      anchor: event.currentTarget,
+      align: 'right',
+      items: [
+        { label: 'New bot', icon: IconBot, run: () => (chat.editor = { bot: null, workspace }) },
+        { label: 'New group chat', icon: IconUsers, run: () => (chat.editor = { group: null, workspace }) },
+        { label: 'New workspace', icon: IconFolderPlus, run: openFolder },
+      ],
+    }
+  }
 
   function botMenu(event, bot) {
     const group = bot.kind === 'group'
@@ -151,7 +165,7 @@
         <section.icon />
         <span class="name">{section.name}</span>
         {#if section.path}<button type="button" class="more press" title="Workspace menu" aria-label="Workspace menu" onclick={(e) => sectionMenu(e, section)}><IconMore /></button>{/if}
-        <button type="button" class="add press" title={section.add} aria-label={section.add} onclick={() => (chat.editor = section.editor)}><IconPlus /></button>
+        <button type="button" class="add press" title={section.add} aria-label={section.add} onclick={(e) => sectionAdd(e, section)}><IconPlus /></button>
       </div>
       {#each section.bots as bot (bot.id)}
         <BotRow {bot} selected={bot.id === chat.selected} onselect={() => select(bot.id)} oncontext={(e) => botMenu(e, bot)} />

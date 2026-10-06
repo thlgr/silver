@@ -9,12 +9,12 @@
   import Sheet from './Sheet.svelte'
   import IconCheck from '~icons/lucide/check'
 
-  let { group = null, onclose } = $props()
+  let { group = null, workspace = '', onclose } = $props()
   const agents = $derived(chat.bots.filter((bot) => bot.kind === 'agent'))
   const workspaces = $derived([{ value: '', label: 'None' }, ...app.workspaces.map((w) => ({ value: w.id, label: w.name }))])
   // The form starts from the bot it was opened with and is not re-seeded while open.
   // svelte-ignore state_referenced_locally
-  const draft = $state({ name: group?.name ?? '', description: group?.description ?? '', members: [...(group?.members ?? [])], workspace_id: group ? (group.workspace_id ?? '') : (app.scope ?? app.workspaces[0]?.id ?? '') })
+  const draft = $state({ name: group?.name ?? '', description: group?.description ?? '', members: [...(group?.members ?? [])], workspace_id: group ? (group.workspace_id ?? '') : (workspace || app.scope || app.workspaces[0]?.id || '') })
   let saving = $state(false)
   let ask = $state(null)
   const valid = $derived(draft.name.trim() && draft.members.length > 0)
