@@ -1562,6 +1562,9 @@ impl RunManager {
                 .unwrap_or_default(),
         );
         let title_seed = task.input.plain_text();
+        if let (Some(_), Some(workspace)) = (self.memory.get(), &task.workspace) {
+            crate::ai_memory::ensure_marker(&workspace.canonical_root);
+        }
         let capture = self
             .open_capture(&mut task, history.is_empty(), &title_seed)
             .await;

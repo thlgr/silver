@@ -94,19 +94,19 @@ def event_names():
 
 def main():
     work = tempfile.mkdtemp(prefix="silver-ai-memory-e2e-")
-    project = os.path.join(work, "proj")
+    project = os.path.join(work, "memtest")
     config = os.path.join(work, "cfg")
     os.makedirs(project)
     os.makedirs(config)
-    with open(os.path.join(project, ".ai-memory.toml"), "w") as f:
-        f.write('workspace = "default"\nproject = "memtest"\n')
     with open(os.path.join(config, "config.toml"), "w") as f:
         f.write(
             f'[model]\nprovider = "custom"\nkind = "openai_compatible"\nname = "mock-model"\n'
             f'base_url = "http://127.0.0.1:{MOCK_PORT}/v1"\napi_key_env = "SILVER_API_KEY"\n\n'
             "[tools]\nwrite_requires_approval = false\ncommand_requires_approval = false\n\n"
-            # The stub on this bind stands in for ai-memory; silver adopts it like a real one.
+            # The stub on this bind stands in for ai-memory; silver adopts it like a real one. The
+            # binary is absent so silver cannot point the real Claude Code config at the stub.
             f'[memory]\nenabled = true\nbind = "127.0.0.1:{STUB_PORT}"\ndata_dir = "{work}/mem"\n'
+            f'binary = "{work}/no-ai-memory"\n'
         )
     with open(os.path.join(config, "secrets.env"), "w") as f:
         f.write("SILVER_API_KEY=dummy\n")
@@ -136,6 +136,11 @@ def main():
         # Graceful shutdown flushes the queue, which delivers the session-end.
         procs[1].send_signal(signal.SIGTERM)
         procs[1].wait(timeout=15)
+
+        # The folder had no marker: the run named its project for agents that cannot send a session.
+        with open(os.path.join(project, ".ai-memory.toml")) as f:
+            marker = f.read()
+        assert 'workspace = "default"' in marker and 'project = "memtest"' in marker, marker
 
         names = event_names()
         for expected in ("session-start", "user-prompt-submit", "post-tool-use", "stop", "session-end"):

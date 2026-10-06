@@ -8,7 +8,7 @@ use serde_json::{json, Value};
 use silver_core::hash::content_hash;
 use silver_protocol::{EventPayload, RunId, SessionId, ToolCallId};
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::process::{Child, Command};
@@ -17,6 +17,8 @@ use tokio::time::Instant;
 
 /// The MCP server name, and the executable silver looks for on `PATH`.
 pub const SERVER_NAME: &str = "ai-memory";
+/// The file that names a folder's ai-memory workspace and project.
+const MARKER: &str = ".ai-memory.toml";
 /// How long a freshly spawned server has to answer its health endpoint.
 const START_TIMEOUT: Duration = Duration::from_secs(20);
 /// How often the health endpoint is polled while starting.
@@ -48,6 +50,8 @@ const HANDOFF_CHARS: usize = 4_000;
 const RETRY_BACKOFF: Duration = Duration::from_millis(250);
 /// How long shutdown waits for the queued events to be delivered.
 const FLUSH_TIMEOUT: Duration = Duration::from_secs(3);
+/// How long one `install-hooks` or `install-mcp` run may take.
+const INSTALL_TIMEOUT: Duration = Duration::from_secs(20);
 
 /// A running (or adopted) ai-memory server and the MCP entry that reaches it.
 pub struct AiMemory {
@@ -95,6 +99,7 @@ impl AiMemory {
             tracing::info!(endpoint = %endpoint, data_dir = %data_dir.display(), "ai-memory started");
             Some(child)
         };
+        tokio::spawn(wire_claude_code(binary.to_string(), endpoint.clone()));
         Some(AiMemory {
             child,
             server: server_for(&bind),
@@ -161,6 +166,44 @@ fn spawn(binary: &str, bind: &str, data_dir: &Path) -> std::io::Result<Child> {
         .spawn()
 }
 
+/// Point Claude Code's hooks and MCP entry at this server, as `install-hooks` and `install-mcp`
+/// do. Both are idempotent, and skipped when silver cannot launch Claude Code, so no config is made
+/// for an absent one. A failure is logged and silver carries on.
+async fn wire_claude_code(binary: String, endpoint: String) {
+    crate::agent_modes::ensure_path().await;
+    if crate::agent_modes::installed("claude") != Some(true) {
+        return;
+    }
+    match install_claude_code(&binary, &endpoint).await {
+        Ok(()) => tracing::info!("Claude Code's ai-memory hooks and MCP entry are in place"),
+        Err(error) => tracing::warn!(%error, "Claude Code could not be wired to ai-memory"),
+    }
+}
+
+async fn install_claude_code(binary: &str, endpoint: &str) -> Result<(), String> {
+    let installs: [&[&str]; 2] = [
+        &["install-hooks", "--agent", "claude-code"],
+        &["install-mcp", "--client", "claude-code"],
+    ];
+    for install in installs {
+        let run = Command::new(binary)
+            .args(install)
+            .args(["--server-url", endpoint, "--apply"])
+            .kill_on_drop(true)
+            .output();
+        let output = tokio::time::timeout(INSTALL_TIMEOUT, run)
+            .await
+            .map_err(|_elapsed| format!("`{}` timed out", install[0]))?
+            .map_err(|error| format!("`{}` did not run: {error}", install[0]))?;
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            let reason = stderr.lines().last().unwrap_or("no output");
+            return Err(format!("`{}` failed: {reason}", install[0]));
+        }
+    }
+    Ok(())
+}
+
 /// Poll the health endpoint until it answers or the start budget runs out.
 async fn wait_healthy(endpoint: &str) -> bool {
     let deadline = tokio::time::Instant::now() + START_TIMEOUT;
@@ -198,12 +241,46 @@ async fn healthy(endpoint: &str) -> bool {
         .is_ok_and(|response| response.status().is_success())
 }
 
+/// The nearest `.ai-memory.toml` from `root` upward, where ai-memory's hooks look: the walk ends
+/// at the home folder or the checkout root.
+fn marker_file(root: &Path) -> Option<PathBuf> {
+    let home = silver_core::dirs::home_dir();
+    for dir in root.ancestors() {
+        let marker = dir.join(MARKER);
+        if marker.is_file() {
+            return Some(marker);
+        }
+        if home.as_deref() == Some(dir) || dir.join(".git").exists() {
+            break;
+        }
+    }
+    None
+}
+
+/// Name a workspace folder's project in a `.ai-memory.toml`, unless it or a parent has one.
+/// ai-memory tells an MCP client that cannot send its session to pass the pair a marker declares
+/// and never to guess it, so Claude Code declines to use memory in a folder without one.
+pub(crate) fn ensure_marker(root: &Path) {
+    if marker_file(root).is_some() {
+        return;
+    }
+    let (workspace, project) = resolve_project(root);
+    let text = format!(
+        "workspace = {}\nproject = {}\n",
+        toml::Value::from(workspace),
+        toml::Value::from(project)
+    );
+    if let Err(error) = crate::atomic_file::write(&root.join(MARKER), text.as_bytes()) {
+        tracing::warn!(%error, "could not name the workspace's ai-memory project");
+    }
+}
+
 /// The `(workspace, project)` ai-memory resolves for this folder: the nearest `.ai-memory.toml`
 /// when it names them, else `default` and the folder's name. ai-memory's git-remote identity can
 /// name a project differently; the panel then shows an empty list rather than a wrong one.
 pub(crate) fn resolve_project(root: &Path) -> (String, String) {
-    let marker = std::fs::read_to_string(root.join(".ai-memory.toml"))
-        .ok()
+    let marker = marker_file(root)
+        .and_then(|path| std::fs::read_to_string(path).ok())
         .and_then(|text| text.parse::<toml::Value>().ok());
     let named = |key: &str| marker.as_ref()?.get(key)?.as_str().map(str::to_string);
     let workspace = named("workspace").unwrap_or_else(|| "default".to_string());
@@ -214,6 +291,26 @@ pub(crate) fn resolve_project(root: &Path) -> (String, String) {
             .to_string()
     });
     (workspace, project)
+}
+
+/// Name the run's project on an ai-memory tool call. MCP carries no working directory, so the
+/// server answers an unscoped call from the project last active on it: another workspace's, when
+/// two are in use. A call that names a scope or asks for every project is left as written.
+pub(crate) fn scope_call(schema: &Value, root: &Path, args: &mut Value) {
+    const SCOPE_FIELDS: [&str; 5] = ["workspace", "project", "scope", "scopes", "global"];
+    let takes = |field: &str| schema["properties"].get(field).is_some();
+    let Some(call) = args.as_object_mut() else {
+        return;
+    };
+    let names_scope = SCOPE_FIELDS
+        .iter()
+        .any(|field| call.get(*field).is_some_and(|value| !value.is_null()));
+    if names_scope || !takes("workspace") || !takes("project") {
+        return;
+    }
+    let (workspace, project) = resolve_project(root);
+    call.insert("workspace".to_string(), workspace.into());
+    call.insert("project".to_string(), project.into());
 }
 
 /// Silver's own lifecycle capture. A native run has no harness hooks, so silver posts what it does
@@ -594,6 +691,50 @@ mod tests {
         );
     }
 
+    fn checkout(parent: &Path, name: &str) -> PathBuf {
+        let root = parent.join(name);
+        std::fs::create_dir_all(root.join(".git")).unwrap();
+        root
+    }
+
+    #[test]
+    fn a_folder_without_a_marker_gets_one_naming_its_project() {
+        let parent = std::env::temp_dir().join(format!("silver-mark-{}", uuid::Uuid::now_v7()));
+        let root = checkout(&parent, "effect\"fx");
+        ensure_marker(&root);
+        assert!(root.join(MARKER).is_file());
+        assert_eq!(
+            resolve_project(&root),
+            ("default".to_string(), "effect\"fx".to_string())
+        );
+    }
+
+    #[test]
+    fn a_marker_in_the_folder_or_a_parent_is_left_alone() {
+        let parent = std::env::temp_dir().join(format!("silver-mark-{}", uuid::Uuid::now_v7()));
+        let own = checkout(&parent, "own");
+        std::fs::write(own.join(MARKER), "workspace = \"team\"\n").unwrap();
+        ensure_marker(&own);
+        assert_eq!(
+            std::fs::read_to_string(own.join(MARKER)).unwrap(),
+            "workspace = \"team\"\n"
+        );
+
+        let inner = parent.join("outer").join("app");
+        std::fs::create_dir_all(&inner).unwrap();
+        std::fs::write(
+            parent.join("outer").join(MARKER),
+            "workspace = \"team\"\nproject = \"shared\"\n",
+        )
+        .unwrap();
+        ensure_marker(&inner);
+        assert!(!inner.join(MARKER).exists());
+        assert_eq!(
+            resolve_project(&inner),
+            ("team".to_string(), "shared".to_string())
+        );
+    }
+
     #[test]
     fn the_mcp_entry_points_at_the_bind() {
         let server = server_for("127.0.0.1:49374");
@@ -601,6 +742,108 @@ mod tests {
         assert_eq!(server.url.as_deref(), Some("http://127.0.0.1:49374/mcp"));
         assert!(matches!(server.transport, McpTransport::Http));
         assert!(server.enabled);
+    }
+
+    fn scope_fields() -> Value {
+        json!({ "properties": { "workspace": {}, "project": {}, "scope": {}, "query": {} } })
+    }
+
+    fn scoped(schema: &Value, args: Value) -> Value {
+        let root = std::env::temp_dir().join(format!("silver-scope-{}", uuid::Uuid::now_v7()));
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(
+            root.join(".ai-memory.toml"),
+            "workspace = \"team\"\nproject = \"silver\"\n",
+        )
+        .unwrap();
+        let mut args = args;
+        scope_call(schema, &root, &mut args);
+        args
+    }
+
+    #[test]
+    fn a_call_naming_no_scope_gets_the_runs_project() {
+        let args = scoped(&scope_fields(), json!({ "query": "tag" }));
+        assert_eq!(
+            args,
+            json!({ "query": "tag", "workspace": "team", "project": "silver" })
+        );
+        let null_scope = scoped(&scope_fields(), json!({ "scope": null, "project": null }));
+        assert_eq!(
+            null_scope["project"], "silver",
+            "a null field names nothing"
+        );
+    }
+
+    #[test]
+    fn a_call_naming_its_own_scope_is_left_alone() {
+        for named in [
+            json!({ "project": "other" }),
+            json!({ "scope": "global" }),
+            json!({ "scopes": [] }),
+            json!({ "global": true }),
+        ] {
+            let schema = json!({ "properties": { "workspace": {}, "project": {}, "scope": {}, "scopes": {}, "global": {} } });
+            assert_eq!(scoped(&schema, named.clone()), named);
+        }
+    }
+
+    #[test]
+    fn a_tool_without_scope_fields_is_left_alone() {
+        let schema = json!({ "properties": { "limit": {} } });
+        assert_eq!(
+            scoped(&schema, json!({ "limit": 3 })),
+            json!({ "limit": 3 })
+        );
+        assert_eq!(scoped(&json!({}), json!({})), json!({}));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn claude_code_is_wired_to_the_server_by_both_installers() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = std::env::temp_dir().join(format!("silver-wire-{}", uuid::Uuid::now_v7()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let log = dir.join("calls");
+        let bin = dir.join("ai-memory");
+        std::fs::write(
+            &bin,
+            format!("#!/bin/sh\necho \"$@\" >> {}\n", log.display()),
+        )
+        .unwrap();
+        std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        let bin = bin.to_str().unwrap();
+        install_claude_code(bin, "http://127.0.0.1:49374")
+            .await
+            .unwrap();
+
+        let calls = std::fs::read_to_string(&log).unwrap();
+        assert_eq!(
+            calls.lines().collect::<Vec<_>>(),
+            [
+                "install-hooks --agent claude-code --server-url http://127.0.0.1:49374 --apply",
+                "install-mcp --client claude-code --server-url http://127.0.0.1:49374 --apply",
+            ]
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_failed_installer_reports_why_and_stops() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = std::env::temp_dir().join(format!("silver-wire-{}", uuid::Uuid::now_v7()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let bin = dir.join("ai-memory");
+        std::fs::write(&bin, "#!/bin/sh\necho 'no config dir' >&2\nexit 1\n").unwrap();
+        std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        let error = install_claude_code(bin.to_str().unwrap(), "http://127.0.0.1:49374")
+            .await
+            .unwrap_err();
+        assert_eq!(error, "`install-hooks` failed: no config dir");
     }
 
     fn scope() -> Arc<RunScope> {

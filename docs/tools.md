@@ -37,7 +37,11 @@ leave them `enabled`; `GET /v1/capabilities` lists only the enabled ones.
 Memory is not a built-in tool: silver manages an ai-memory server
 ([ADR 0002](adr/0002-shared-memory-via-ai-memory.md)), so every run gets its `memory_*` tools
 (`memory_query`, `memory_briefing`, `memory_write_page`, `memory_handoff_*`, …), and every bot and
-external harness in one workspace shares one memory.
+external harness in one workspace shares one memory. A `memory_*` call that names no scope gets the
+run's workspace and project added, so it lands in the project of the run's own folder (the
+`.ai-memory.toml` there names it). Silver creates that file in a workspace folder at its first run
+when neither the folder nor a parent has one, so an external agent such as Claude Code finds the
+names to pass.
 
 A global (workspace-less) run sees only the tools that do not need a workspace; a workspace run
 sees the rest too. Pick a workspace in the web UI, or pass `workspace_id` to `POST /v1/runs`, to

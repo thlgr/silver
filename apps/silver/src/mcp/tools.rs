@@ -834,7 +834,15 @@ impl Tool for McpTool {
         toolset::MCP
     }
 
-    async fn execute(&self, _ctx: &ToolContext<'_>, args: Value) -> CoreResult<ToolOutcome> {
+    async fn execute(&self, ctx: &ToolContext<'_>, mut args: Value) -> CoreResult<ToolOutcome> {
+        let memory_root = ctx
+            .run
+            .workspace
+            .as_ref()
+            .filter(|_| self.connection.name() == crate::ai_memory::SERVER_NAME);
+        if let Some(workspace) = memory_root {
+            crate::ai_memory::scope_call(&self.schema, &workspace.canonical_root, &mut args);
+        }
         Ok(self
             .connection
             .call_tool(&self.tool_name, args, self.read_only)

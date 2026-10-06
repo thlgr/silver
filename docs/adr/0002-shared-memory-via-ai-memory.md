@@ -38,10 +38,22 @@ Retire silver's Markdown memory and make ai-memory the memory of record.
 - The server's data directory lives under silver's own, so the store travels with an install.
   ai-memory resolves the project from each run's workspace, which is what makes every harness in
   one workspace share one memory.
-- External harnesses share the same server by the operator's own choice: running ai-memory's
-  installers (`ai-memory install-mcp --client claude-code --apply`, `install-hooks --agent
-  claude-code --apply`, …) points them at it. silver does not touch their configs; it does not
-  reimplement a harness's memory protocol either.
+- Claude Code shares the same server without a manual step: when silver can launch it, silver
+  runs ai-memory's own `install-hooks --agent claude-code` and `install-mcp --client claude-code`
+  against the server at start. Both are idempotent, so a start that finds them in place changes
+  nothing. Any other harness shares the server by the operator's own choice (`ai-memory
+  install-mcp --client …`, `install-hooks --agent …`); silver does not reimplement a harness's
+  memory protocol.
+- silver names the run's project on every ai-memory tool call that names none (`scope_call`). MCP
+  carries no working directory, so the server answers an unscoped call from the project last
+  active on it, which is another workspace's whenever two are in use, and a small model cannot
+  be relied on to know the names. A call that names its own scope, or asks for every project, is
+  left as written.
+- A harness that cannot send its session (Claude Code over the static MCP entry) is told by
+  ai-memory to pass the pair its `.ai-memory.toml` declares and never to guess it, so in a folder
+  without one it declines to use memory. At the start of a run in a workspace, silver writes that
+  file (`default` and the folder's name) unless the folder or a parent already has one
+  (`ensure_marker`). It is an untracked file in the project; commit it to share the names.
 - A run on a native provider has no harness hooks, so silver is its **lifecycle producer**: it
   posts the run's start, prompt, tool calls and end to ai-memory's `/hook/batch`
   (`MemoryHooks`, `apps/silver/src/ai_memory.rs`), scoped to the workspace's `(workspace, project)`
