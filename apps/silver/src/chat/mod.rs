@@ -20,7 +20,7 @@ use silver_protocol::chat::{
     AnswerRequest, BotKind, BotStatus, BotView, ChatEntry, ChatEvent, CreateBotRequest, EntryKind,
     LimitWindow, SendMessageRequest, UpdateBotRequest,
 };
-use silver_protocol::{ApprovalDecisionRequest, RunId};
+use silver_protocol::{ApprovalDecisionRequest, ContextUsage, RunId};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
 use store::{now_ms, BotStats};
@@ -57,6 +57,8 @@ struct Runtime {
     stop_requested: bool,
     /// Approvals the turn is waiting on.
     pending: usize,
+    /// How full the context window was for the bot's last request.
+    context: Option<ContextUsage>,
 }
 
 #[derive(Default)]
@@ -786,6 +788,11 @@ fn view(
         (_, Some((_, _, text, _))) => Some(preview(text)),
         _ => None,
     };
+    // Context is the agent's own; a group has none, like its limits.
+    let context = match row.kind {
+        BotKind::Agent => live.and_then(|live| live.context),
+        BotKind::Group => None,
+    };
     BotView {
         status: live.map_or(BotStatus::Idle, |live| live.status),
         activity,
@@ -799,6 +806,7 @@ fn view(
         last_at: last.map_or(row.created_at, |(_, _, _, at)| *at),
         unread: stats.map_or(0, |stats| stats.unread),
         limits,
+        context,
         id: row.id,
         kind: row.kind,
         name: row.name,

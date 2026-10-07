@@ -19,6 +19,7 @@
   --m-dim: light-dark(#d9d9d9, #333333);
   --m-danger: light-dark(#c23a2b, #f0a7a7);
   --m-warning: #f0a030;
+  --m-context: light-dark(#2f9e86, #75dbc0);
   --m-code: light-dark(#f4f4f4, #111111);
   --m-added: light-dark(#2e7d32, #8fd18b);
   --m-removed: light-dark(#c62828, #f0a7a7);

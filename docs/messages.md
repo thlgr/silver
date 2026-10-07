@@ -177,6 +177,9 @@ the cap fails half way through its work. Silver reads those limits so it can sto
   from 90%, always shown beside an agent's name in the chat header and in the roster. Hover it (tap
   it on a touch screen) for every window, with how much is used and when it resets; in the roster
   the windows are its tooltip. A group has none: its members' bars are on their replies.
+- **Context beside it.** An agent that has run shows how full its context window is, as a thin bar
+  in a colour of its own next to the usage bar in the chat header (silver compacts near the end). A
+  group has none.
 - **On the message.** Each reply carries the limits as they were when it was written, as the same
   bar beside the bot's name in a group chat and beside the time in a bot's own chat. Older replies
   keep the reading they were written with.

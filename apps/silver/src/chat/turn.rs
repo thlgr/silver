@@ -438,6 +438,8 @@ impl ChatHub {
         self.expire_permissions(bot).await;
         let failed = outcome.error.as_deref().filter(|error| *error != "stopped");
         self.update_runtime(bot, |live| {
+            // The context reading outlives the turn, so its bar stays on the bot.
+            let context = live.context.take();
             *live = Runtime {
                 status: if failed.is_some() {
                     BotStatus::Error
@@ -445,6 +447,7 @@ impl ChatHub {
                     BotStatus::Idle
                 },
                 activity: failed.map(preview).unwrap_or_default(),
+                context,
                 ..Runtime::default()
             };
         });
@@ -636,6 +639,12 @@ impl Writer<'_, '_> {
             }
             EventPayload::TextDelta { delta } => self.delta(&delta),
             EventPayload::TextCompleted { text } => self.reply = Some(text),
+            EventPayload::ContextUpdated { context } => {
+                // Kept on the bot so its chat can show how full the context is.
+                let bot = &self.spec.bot.id;
+                self.hub
+                    .update_runtime(bot, |live| live.context = Some(context));
+            }
             EventPayload::ReasoningDelta { delta } => self.thought(&delta).await,
             EventPayload::ToolStarted { name, preview, .. } => {
                 self.segment_over = true;

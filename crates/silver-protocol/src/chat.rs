@@ -1,7 +1,7 @@
 //! The bot chat contract: the roster, the messages in a chat or thread, and the live stream. The
 //! server routes everything; a client never parses a mention or decides who speaks.
 
-use crate::{ApprovalDecision, ApprovalId, RiskLevel, RunId, SessionId, WorkspaceId};
+use crate::{ApprovalDecision, ApprovalId, ContextUsage, RiskLevel, RunId, SessionId, WorkspaceId};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -110,6 +110,9 @@ pub struct BotView {
     /// has none we can read, or the session has reset since.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub limits: Vec<LimitWindow>,
+    /// How full the agent's context window was for its last request; absent until it has run.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context: Option<ContextUsage>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
