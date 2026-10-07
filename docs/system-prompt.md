@@ -988,7 +988,7 @@ workspace files are untrusted data).
 | stable | identity (`DEFAULT_BASE_PROMPT`) | always |
 | stable | help pointer (`SILVER_HELP_GUIDANCE`) | the run has tools |
 | stable | `TASK_COMPLETION_GUIDANCE`, `PARALLEL_TOOL_CALL_GUIDANCE` | the run has tools |
-| stable | tool guidance: `SESSION_SEARCH_GUIDANCE`, `MEDIA_GUIDANCE`, `SKILLS_GUIDANCE` | the matching tool is in the run's tool set (`session_search`; `view_image` or `search_documents`; `skill_manage`) |
+| stable | tool guidance: `SESSION_SEARCH_GUIDANCE`, `MEMORY_GUIDANCE`, `MEDIA_GUIDANCE`, `SKILLS_GUIDANCE` | the matching tool is in the run's tool set (`session_search`; `ai_memory__memory_query`; `view_image` or `search_documents`; `skill_manage`) |
 | stable | sudo tip (`NON_ROOT_SUDO_TIP` plus the OS name) | `bash` is available and the daemon is not root |
 | stable | `TOOL_USE_ENFORCEMENT_GUIDANCE` | the model matches `TOOL_USE_ENFORCEMENT_MODELS` |
 | stable | `GOOGLE_MODEL_OPERATIONAL_GUIDANCE` | as above, and the model is Gemini or Gemma |
@@ -1019,11 +1019,13 @@ so the cached prefix does not change mid-conversation.
 
 | Hermes text | In silver |
 |---|---|
-| `TASK_COMPLETION_GUIDANCE`, `PARALLEL_TOOL_CALL_GUIDANCE`, `TOOL_USE_ENFORCEMENT_GUIDANCE`, `OPENAI_MODEL_EXECUTION_GUIDANCE`, `GOOGLE_MODEL_OPERATIONAL_GUIDANCE`, `SESSION_SEARCH_GUIDANCE` | copied |
+| `TASK_COMPLETION_GUIDANCE`, `PARALLEL_TOOL_CALL_GUIDANCE`, `TOOL_USE_ENFORCEMENT_GUIDANCE`, `GOOGLE_MODEL_OPERATIONAL_GUIDANCE`, `SESSION_SEARCH_GUIDANCE` | copied |
+| `OPENAI_MODEL_EXECUTION_GUIDANCE` | copied without the line saying the memory and user profile describe the user: silver puts no profile in the prompt |
 | `DEFAULT_AGENT_IDENTITY` | replaced by silver's three-line `DEFAULT_BASE_PROMPT` |
 | `HERMES_AGENT_HELP_GUIDANCE` | adapted to a one-line pointer at the project docs and source |
 | `SKILLS_GUIDANCE`, skills index preamble | adapted to silver's `skill_manage` actions; the index loads a skill only on a clear match, because "err toward loading" sent small models into skills for tasks that needed none |
 | `CODING_AGENT_GUIDANCE` | adapted: silver's tool names, a shell-only variant (`SHELL_READ_LINE`, `SHELL_EDIT_LINE`) for the Pi preset, and a `patch` miss rule |
+| (no upstream section) | `MEMORY_GUIDANCE`: ai-memory's own routing instructions are not sent to the model, so a native run is told when to call `ai_memory__memory_query` and `ai_memory__memory_briefing`; without it the tools sat unused unless the user asked about memory |
 | (no upstream section) | `MEDIA_GUIDANCE` for `view_image` and `search_documents`: without it a small model reads a screenshot's filename and answers from imagination, or greps a PDF's bytes |
 | (no upstream section) | the subagent catalogue, kept in the prompt rather than the tool description for the same reason as the skills index |
 | platform hints, `KANBAN_GUIDANCE`, `hud_surface_note`, bot mode, plugin sections, auto-loaded skills, the mid-turn steering note | not ported: no matching feature (the CLI and TUI the hints described are retired, and the web UI renders Markdown) |

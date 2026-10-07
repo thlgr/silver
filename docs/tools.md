@@ -41,7 +41,9 @@ external harness in one workspace shares one memory. A `memory_*` call that name
 run's workspace and project added, so it lands in the project of the run's own folder (the
 `.ai-memory.toml` there names it). Silver creates that file in a workspace folder at its first run
 when neither the folder nor a parent has one, so an external agent such as Claude Code finds the
-names to pass.
+names to pass. A run on silver's own loop is also told when to reach for `memory_query` and
+`memory_briefing` (the server's own routing instructions are not sent to the model), but only when
+those tools are in its tool set.
 
 A global (workspace-less) run sees only the tools that do not need a workspace; a workspace run
 sees the rest too. Pick a workspace in the web UI, or pass `workspace_id` to `POST /v1/runs`, to
