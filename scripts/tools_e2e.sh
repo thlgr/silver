@@ -42,6 +42,14 @@ for i in $(seq 1 60); do curl -sf "http://127.0.0.1:$DPORT/health" >/dev/null 2>
 WSID=$(curl -s -X POST "http://127.0.0.1:$DPORT/v1/workspaces" -H 'content-type: application/json' \
   -d "{\"name\": \"tools\", \"path\": \"$WSDIR\"}" | python3 -c 'import sys,json; print(json.load(sys.stdin)["id"])')
 
+# Server settings: change the run timeout and check it took effect and persisted.
+curl -s -X POST "http://127.0.0.1:$DPORT/v1/server" -H 'content-type: application/json' \
+  -d '{"run_timeout_seconds": 600}' >/dev/null
+got=$(curl -s "http://127.0.0.1:$DPORT/v1/server" | python3 -c 'import sys,json; print(json.load(sys.stdin)["run_timeout_seconds"])')
+[ "$got" = "600" ] || { echo "RUN_TIMEOUT_NOT_APPLIED: $got"; exit 1; }
+grep -q 'run_timeout_seconds = 600' "$CFG/config.toml" || { echo RUN_TIMEOUT_NOT_PERSISTED; exit 1; }
+echo "--- /v1/server: run_timeout_seconds -> 600 (persisted) ---"
+
 run() {
   local prompt="$1"
   local body

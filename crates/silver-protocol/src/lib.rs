@@ -1175,5 +1175,11 @@ pub struct LimitsView {
     pub max_message_bytes: u64,
 }
 
+/// The server settings the web UI reads and changes (`GET`/`POST /v1/server`).
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+pub struct ServerSettings {
+    pub run_timeout_seconds: u64,
+}
+
 /// Configuration schema version shared by the daemon and the CLI so the two can never drift.
 pub const CONFIG_VERSION: u32 = 1;

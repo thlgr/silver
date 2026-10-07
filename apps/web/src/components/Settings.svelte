@@ -1,6 +1,6 @@
 <script>
   import { api, hasToken, setToken } from '../lib/api.js'
-  import { app, setApprovalMode, setAdvisor, connect, logout, beginLogin, pollLogin, loadProviders, notify, currentPreset, setPreset, savePreset, deletePreset, loadPresets } from '../lib/state.svelte.js'
+  import { app, setApprovalMode, setAdvisor, setRunTimeout, connect, logout, beginLogin, pollLogin, loadProviders, notify, currentPreset, setPreset, savePreset, deletePreset, loadPresets } from '../lib/state.svelte.js'
   import IconX from '~icons/lucide/x'
   import IconGeneral from '~icons/lucide/settings'
   import IconKey from '~icons/lucide/key-round'
@@ -26,6 +26,11 @@
   let catalog = $state(null)
   let nameField = $state(null)
   let editing = $state(null) // the preset the editor shows; picking it here does not switch the chat
+  let timeout = $state(null) // run timeout in minutes, as typed
+  // Seed the field from the server's value once it is known.
+  $effect(() => {
+    if (app.server && timeout === null) timeout = Math.max(1, Math.round(app.server.run_timeout_seconds / 60))
+  })
 
   $effect(() => {
     if (app.settingsTab === 'presets' && !catalog) {
@@ -186,6 +191,12 @@
             <option value="off">Never ask</option>
           </select>
         </label>
+        {#if app.server}
+          <label class="setting">
+            <div><div>Run timeout</div><p>How long a hosted run may work before it stops and asks you to continue. Applies to new runs; local models have no limit. Minutes.</p></div>
+            <input class="field narrow" type="number" min="1" bind:value={timeout} onchange={() => timeout && setRunTimeout(Math.round(timeout) * 60)} />
+          </label>
+        {/if}
         {#if app.advisor}
           <label class="setting">
             <div>

@@ -34,6 +34,7 @@ export const app = $state({
   pendingYolo: false,
   pendingPlan: false, // /plan in a chat with no session yet; the first run enters plan mode
   approvals: null, // { mode, frozen }
+  server: null, // { run_timeout_seconds } from GET /v1/server
   advisor: null, // { enabled, has_key, questions } from GET /v1/advisor
   loop: null, // { prompt, interval, times, fired, status, next }
   heartbeat: null, // { prompt, interval, status, next, fired }
@@ -99,12 +100,13 @@ export function setDraft(key, text) {
 // ---------------------------------------------------------------- boot & lists
 
 const loadWorkspaces = () => attempt(async () => {
-  const [workspaces, approvals, advisor] = await Promise.all([api('/v1/workspaces'), api('/v1/approvals'), api('/v1/advisor').catch(() => null)])
+  const [workspaces, approvals, server, advisor] = await Promise.all([api('/v1/workspaces'), api('/v1/approvals'), api('/v1/server').catch(() => null), api('/v1/advisor').catch(() => null)])
   // The sidebar order the user dragged; workspaces added since then go last.
   const { order } = app.settings
   const rank = (w) => (order.includes(w.id) ? order.indexOf(w.id) : order.length)
   app.workspaces = workspaces.sort((a, b) => rank(a) - rank(b))
   app.approvals = approvals
+  app.server = server
   app.advisor = advisor
   app.scope ??= workspaces[0]?.id ?? null
 })
@@ -966,6 +968,13 @@ export async function setApprovalMode(mode) {
   const previous = app.approvals
   app.approvals = { ...previous, mode }
   app.approvals = (await attempt(() => api('/v1/approvals', { method: 'POST', body: { mode } }))) ?? previous
+}
+
+/// Change the wall-clock budget a hosted run may spend; persisted server-side.
+export async function setRunTimeout(seconds) {
+  const saved = await attempt(() => api('/v1/server', { method: 'POST', body: { run_timeout_seconds: seconds } }))
+  if (saved) app.server = saved
+  return !!saved
 }
 
 export async function setAdvisor(enabled) {

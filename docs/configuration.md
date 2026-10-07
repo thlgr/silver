@@ -120,7 +120,7 @@ command_requires_approval = true
 | --- | --- | --- |
 | `bind` | `127.0.0.1:7777` | A non-loopback bind requires `bearer_token` of at least 16 characters. |
 | `max_concurrent_runs` | 4 | Bounds execution, not creation: a run over capacity still returns 202 and waits. |
-| `run_timeout_seconds` | 1800 | Wall clock for a hosted-model run. |
+| `run_timeout_seconds` | 1800 | Wall clock for a hosted-model run. Changeable in the web UI (Settings → General) or via `POST /v1/server`; persisted to this file. |
 | `max_message_bytes` | 1 MiB | Larger messages are refused with `context_too_large`. |
 | `request_body_limit_bytes` | 2 MiB | Always enforced. |
 | `bearer_token` | none | Compared in constant time. Without one every request is accepted. |

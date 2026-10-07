@@ -266,6 +266,11 @@ impl ApprovalControl {
         self.frozen
     }
 
+    /// The configuration file a runtime setting change is persisted to, when the daemon has one.
+    pub fn config_path(&self) -> Option<&std::path::Path> {
+        self.config_path.as_deref()
+    }
+
     /// The status payload served by GET /v1/approvals.
     pub fn status(&self) -> silver_protocol::ApprovalStatus {
         silver_protocol::ApprovalStatus {
@@ -666,6 +671,8 @@ pub struct RunManager {
     auth: std::sync::OnceLock<Arc<crate::auth::AuthStore>>,
     /// Where runs on a native provider report to ai-memory, when memory is on.
     memory: std::sync::OnceLock<MemoryHooks>,
+    /// Wall-clock budget a hosted run may spend, in seconds; runtime-mutable from the web UI.
+    run_timeout_seconds: std::sync::atomic::AtomicU64,
 }
 
 /// Opens every /goal continuation run.
@@ -742,6 +749,7 @@ impl RunManager {
     ) -> Arc<Self> {
         let registry = Arc::new(ApprovalRegistry::default());
         let approval_memory = Arc::new(ApprovalMemory::load(&config.data_dir()));
+        let initial_run_timeout = config.server.run_timeout_seconds.max(1);
         let approval = ApprovalControl::new(
             &config,
             Db::clone(&db),
@@ -788,6 +796,7 @@ impl RunManager {
             plans_dir,
             auth: std::sync::OnceLock::new(),
             memory: std::sync::OnceLock::new(),
+            run_timeout_seconds: std::sync::atomic::AtomicU64::new(initial_run_timeout),
         })
     }
 
@@ -866,6 +875,31 @@ impl RunManager {
 
     pub fn config(&self) -> &Config {
         &self.config
+    }
+
+    /// The wall-clock budget a hosted run may spend, in seconds.
+    pub fn run_timeout_seconds(&self) -> u64 {
+        self.run_timeout_seconds
+            .load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// Persist a new run-timeout budget and apply it to future runs. Refused at zero, which no
+    /// run fits in.
+    pub fn set_run_timeout_seconds(&self, seconds: u64) -> anyhow::Result<()> {
+        if seconds == 0 {
+            anyhow::bail!("run_timeout_seconds must be at least 1");
+        }
+        if let Some(path) = self.approval.config_path() {
+            crate::config::persist_setting(
+                path,
+                "server",
+                "run_timeout_seconds",
+                (seconds as i64).into(),
+            )?;
+        }
+        self.run_timeout_seconds
+            .store(seconds, std::sync::atomic::Ordering::Relaxed);
+        Ok(())
     }
 
     /// The opt-in spend guard shared with the run tasks.
@@ -1493,20 +1527,26 @@ impl RunManager {
                 agent.without_tools(&silver_core::tools::team::TEAM_TOOLS)
             }
         };
+        // The run timeout is runtime-mutable; the base agent carries the value from startup, so
+        // reusing it is only safe while the setting has not changed.
+        let base_timeout = self.config.server.run_timeout_seconds.max(1);
+        let timeout = self.run_timeout_seconds();
+        let timed = move |agent: Agent| agent.with_run_timeout(timeout);
         match (run_preset, run_effort) {
-            (Some(preset), Some(level)) => Arc::new(team(
+            (Some(preset), Some(level)) => Arc::new(timed(team(
                 Agent::clone(&self.agent)
                     .with_only_tools(&preset.tools)
                     .with_reasoning_effort(Some(level.as_str())),
-            )),
-            (Some(preset), None) => Arc::new(team(
+            ))),
+            (Some(preset), None) => Arc::new(timed(team(
                 Agent::clone(&self.agent).with_only_tools(&preset.tools),
-            )),
-            (None, Some(level)) => Arc::new(team(
+            ))),
+            (None, Some(level)) => Arc::new(timed(team(
                 Agent::clone(&self.agent).with_reasoning_effort(Some(level.as_str())),
-            )),
-            (None, None) if chat => Arc::new(team(Agent::clone(&self.agent))),
-            (None, None) => Arc::clone(&self.agent),
+            ))),
+            (None, None) if chat => Arc::new(timed(team(Agent::clone(&self.agent)))),
+            (None, None) if timeout == base_timeout => Arc::clone(&self.agent),
+            (None, None) => Arc::new(timed(team(Agent::clone(&self.agent)))),
         }
     }
 

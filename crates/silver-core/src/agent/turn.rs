@@ -583,6 +583,13 @@ impl Agent {
         self
     }
 
+    /// Set the wall-clock budget a hosted run may spend, in seconds. The daemon applies a value
+    /// the web UI changed to every new run through here.
+    pub fn with_run_timeout(mut self, seconds: u64) -> Self {
+        self.config.run_timeout = Duration::from_secs(seconds.max(1));
+        self
+    }
+
     /// The list price of a model, from the resolver, when known.
     pub async fn model_price(&self, model: &str) -> Option<ModelPrice> {
         self.context_resolver.as_ref()?.price(model).await

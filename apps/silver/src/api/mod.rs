@@ -18,6 +18,7 @@ pub mod presets;
 pub mod provider;
 pub mod rate_limit;
 pub mod runs;
+pub mod server;
 pub mod sessions;
 pub mod skills;
 pub mod sse;
@@ -266,6 +267,7 @@ fn routes() -> Router<AppState> {
         .route("/v1/daemon/pause", post(daemon::pause))
         .route("/v1/daemon/resume", post(daemon::resume))
         .route("/v1/daemon/status", get(daemon::status))
+        .route("/v1/server", get(server::get).post(server::set))
         .route("/v1/approvals", get(approvals::get).post(approvals::set))
         .route("/v1/advisor", get(advisor::get).post(advisor::set))
         .route("/v1/provider/status", get(provider::status))

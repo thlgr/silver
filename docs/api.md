@@ -64,6 +64,7 @@ and key. One run per session at a time: a second returns `session_busy`.
 | GET | `/v1/daemon/status` | `{paused}` |
 | GET | `/v1/approvals` | `{mode, frozen}`: the effective approval mode, and whether `--yolo` pinned it |
 | POST | `/v1/approvals` | Persist a new global `{mode: "manual"\|"smart"\|"off"}`; refused while pinned |
+| GET, POST | `/v1/server` | `{run_timeout_seconds}`: read or change the hosted-run wall-clock budget (Settings → General); persisted to `config.toml` |
 | GET, POST | `/v1/advisor` | Jev hints: read `{enabled, has_key, questions}`; switch with `{enabled}` (saved as `agent.jev_hints`) |
 | GET | `/v1/models?provider=` | The models the endpoint advertises (`{provider, default, authenticated, models}`); empty when it has no catalog. For an [agent mode](provider-setup.md#external-agent-modes-acp) they are the agent's own, read by starting it, and only when `provider` is named; `efforts` lists the levels its `effort` option offers |
 | GET | `/v1/auth` | Every provider with its endpoint, model, whether a run could authenticate, where the credential comes from (`stored`, `oauth`, `env`, `none`), `configured`, and `installed` for an [agent mode](provider-setup.md#external-agent-modes-acp) (its CLI can be launched here; `null` for any other preset) |
